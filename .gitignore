@@ -1,0 +1,29 @@
+# ==============================================================================
+# Git Ignore - Robot 3 GDL Jugador de Gato
+# ==============================================================================
+
+# Compilación y binarios ESP-IDF (evitar saturar repositorio)
+build/
+sdkconfig.old
+
+# Archivos de caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+*.bak
+
+# IDE y herramientas locales
+.cache/
+.vscode/
+*.log
+
+# Archivos pesados o temporales de desarrollo
+WhatsApp Video*.mp4
+docx_extracted.txt
+word/
+crop_*.jpg
+frame_*.jpg
+probe_points.jpg
+video_sample.jpg

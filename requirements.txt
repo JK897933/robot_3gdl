@@ -1,0 +1,8 @@
+# ==============================================================================
+# Dependencias de Python - Robot 3 GDL Jugador de Gato con Visión Artificial
+# ==============================================================================
+pyserial>=3.5
+opencv-python>=4.8.0
+numpy>=1.24.0
+reportlab>=4.0.0
+Pillow>=10.0.0
