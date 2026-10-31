@@ -1221,10 +1221,35 @@ class Robot3GDLGatoVisionController(tk.Tk):
         # 5. Transmisión del paquete angular al ESP32
         self.send_angles_command(angles[0], angles[1], angles[2])
 
+    def cmd_goto_angles(self, q1, q2, q3):
+        """Mueve el robot directamente a consignas angulares (q1, q2, q3) en grados respetando cinemática."""
+        if getattr(self, 'motors_free_state', False):
+            self.motors_free_state = False
+            self.update_zero_bar_ui()
+        for i, val in enumerate([q1, q2, q3]):
+            self.target_angles[i] = float(val)
+        xfk, yfk, zfk = self.kin.forward_kinematics(q1, q2, q3)
+        self.cart_x, self.cart_y, self.cart_z = xfk, yfk, zfk
+        def _update_ui():
+            try:
+                self.ent_x.delete(0, tk.END); self.ent_x.insert(0, f"{xfk:.1f}")
+                self.ent_y.delete(0, tk.END); self.ent_y.insert(0, f"{yfk:.1f}")
+                self.ent_z.delete(0, tk.END); self.ent_z.insert(0, f"{zfk:.1f}")
+                self.lbl_ik_status.config(
+                    text=f"Estado IK: CALIBRADO (Teach-In 1:1) | Pos: ({xfk:.1f}, {yfk:.1f}, {zfk:.1f}) cm",
+                    fg=COLOR_GREEN_SUCCESS
+                )
+                for i in range(3):
+                    self.sliders_ax[i].set(self.target_angles[i])
+            except Exception:
+                pass
+        self.dispatch_ui(_update_ui)
+        self.send_angles_command(q1, q2, q3)
+
     def cmd_goto_cell(self, cell_idx):
         """
-        Ejecuta el movimiento hacia una de las 9 casillas del gato usando Cinemática Inversa:
-        - Modo 'place': Colocar a nivel de tablero (Z=3.0 cm).
+        Ejecuta el movimiento hacia una de las 9 casillas del gato usando Cinemática Inversa o Calibración Teach-In:
+        - Modo 'place': Colocar a nivel de tablero (Z=3.0 cm o ángulos calibrados físicamente).
         - Modo 'hover': Aproximación aérea a 5 cm sobre el tablero (Z=8.0 cm).
         - Modo 'pick_place': Secuencia completa automática tomando ficha del dispensador.
         """
@@ -1257,17 +1282,41 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 cs = self.calculate_checksum(payload)
                 self.send_serial_raw(f"${payload}*{cs:02X}\r\n")
         else: # "place"
-            angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, cz, elbow_up=True)
+            # Prioridad 1: Si existe calibración directa de ángulos guardados para esta casilla física
+            calib_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "casillas_calibradas.json")
+            taught_angles = None
+            if os.path.exists(calib_file):
+                try:
+                    with open(calib_file, "r", encoding="utf-8") as f:
+                        c_cell = json.load(f).get("cells", {}).get(str(cell_idx + 1))
+                        if c_cell and "angles" in c_cell:
+                            taught_angles = tuple(c_cell["angles"])
+                except Exception:
+                    pass
+
+            if taught_angles:
+                angles = taught_angles
+                reachable = True
+                msg = "OK (Ángulos Calibrados 1:1)"
+            else:
+                angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, cz, elbow_up=True)
+
             if not reachable:
                 self.lbl_ik_status.config(text=f"Estado IK: [ERROR] {msg}", fg=COLOR_RED_DANGER)
                 messagebox.showwarning("Anticolisión Casilla", f"Casilla {cell_idx+1} [Tablero]:\n\n{msg}\n\nReposicione el tablero a mayor distancia para que la tuerca M2-M3 no colisione.")
                 return
             if hasattr(self, 'lbl_cell_angles_info'):
+                info_txt = f"Casilla {cell_idx+1} [TABLERO 1:1]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°" if taught_angles else f"Casilla {cell_idx+1} [TABLERO Z={cz:.1f}cm]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°"
                 self.lbl_cell_angles_info.config(
-                    text=f"Casilla {cell_idx+1} [TABLERO Z=3cm]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°",
+                    text=info_txt,
                     fg=COLOR_GREEN_SUCCESS
                 )
-            self.cmd_goto_xyz(cx, cy, cz)
+
+            if taught_angles:
+                self.cmd_goto_angles(angles[0], angles[1], angles[2])
+            else:
+                self.cmd_goto_xyz(cx, cy, cz)
+
             if self.running and self.serial_port and self.serial_port.is_open:
                 self.pkt_seq = (self.pkt_seq + 1) % 10000
                 payload = f"PKT,{self.pkt_seq},0,CELL,{cell_idx+1},0.0,0.0"
@@ -1286,6 +1335,27 @@ class Robot3GDLGatoVisionController(tk.Tk):
           - Columna 2 (Centro): 0.0 cm
           - Columna 3 (Derecha): -4.5 cm
         """
+        # 1. Si existe calibración física por aprendizaje (Teach-In 1:1), cargarla con prioridad absoluta
+        calib_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "casillas_calibradas.json")
+        if os.path.exists(calib_file):
+            try:
+                with open(calib_file, "r", encoding="utf-8") as f:
+                    cdata = json.load(f).get("cells", {})
+                new_coords = []
+                for i in range(1, 10):
+                    item = cdata.get(str(i))
+                    if item and "cartesian" in item:
+                        new_coords.append(tuple(item["cartesian"]))
+                if len(new_coords) == 9:
+                    self.cell_coords = new_coords
+                    self.board_center_x = self.cell_coords[4][0]
+                    p_item = cdata.get("pick")
+                    if p_item and "cartesian" in p_item:
+                        self.pick_coord = tuple(p_item["cartesian"])
+                    return
+            except Exception:
+                pass
+
         if center_x is None:
             # Selecciona la distancia óptima según la longitud de los eslabones:
             center_x = 53.0 if getattr(self.kin, 'a2', 32.9) > 28.0 else 42.0
@@ -2313,6 +2383,13 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         btn_template.pack(side=tk.LEFT, padx=(0, 6))
 
+        # Botón para Calibrador de Casillas (Teach-In 1:1)
+        btn_calib = tk.Button(
+            top_bar, text="Calibrador 1:1", bg="#15803d", fg="#ffffff", activebackground="#166534",
+            font=("Segoe UI", 9, "bold"), padx=10, pady=2, bd=0, relief=tk.FLAT, cursor="hand2", command=self.launch_calibrador_casillas
+        )
+        btn_calib.pack(side=tk.LEFT, padx=(0, 6))
+
         # Botón para cambiar o configurar características del Robot
         self.btn_robot_config = tk.Button(
             top_bar, text=f"Perfil: {self.active_profile_name[:18]}", bg="#0284c7", fg="#ffffff", activebackground="#0369a1",
@@ -2543,6 +2620,12 @@ class Robot3GDLGatoVisionController(tk.Tk):
             font=("Segoe UI", 7, "bold"), bd=0, padx=6, pady=1, cursor="hand2", command=self.show_board_position_template_modal
         )
         btn_tpl_top.pack(side=tk.LEFT, padx=(8, 0))
+
+        btn_calib_top = tk.Button(
+            r_cbox_top, text="Calibrador 1:1", bg="#15803d", fg="#ffffff", activebackground="#166534",
+            font=("Segoe UI", 7, "bold"), bd=0, padx=6, pady=1, cursor="hand2", command=self.launch_calibrador_casillas
+        )
+        btn_calib_top.pack(side=tk.LEFT, padx=(4, 0))
 
         # Selector de Modo de Acción para las 9 Casillas
         self.cell_action_mode = tk.StringVar(value="place")
@@ -4147,14 +4230,33 @@ class Robot3GDLGatoVisionController(tk.Tk):
         refresh_modal()
 
     def open_printable_template(self):
-        """Abre la plantilla física a escala 1:1 en el navegador web predeterminado para imprimir en papel."""
-        import os, webbrowser
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plantilla_gato_escala_1a1.html")
-        if os.path.exists(path):
-            path_url = path.replace("\\", "/")
+        """Abre la plantilla física a escala 1:1 en PDF o navegador para imprimir en papel."""
+        import os, webbrowser, subprocess
+        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Plantilla_Gato_Escala_1a1.pdf")
+        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plantilla_gato_escala_1a1.html")
+        if os.path.exists(pdf_path):
+            try:
+                if sys.platform.startswith("win"):
+                    os.startfile(pdf_path)
+                else:
+                    subprocess.Popen(["xdg-open", pdf_path])
+                return
+            except Exception:
+                pass
+        if os.path.exists(html_path):
+            path_url = html_path.replace("\\", "/")
             webbrowser.open(f"file:///{path_url}")
         else:
-            messagebox.showerror("Archivo no encontrado", f"No se encontró el archivo:\n{path}")
+            messagebox.showerror("Archivo no encontrado", f"No se encontró el archivo:\n{pdf_path}")
+
+    def launch_calibrador_casillas(self):
+        """Lanza la herramienta gráfica dedicada de calibración de casillas y ajuste de cinemática inversa."""
+        import subprocess, sys
+        calib_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibrador_casillas.py")
+        if os.path.exists(calib_script):
+            subprocess.Popen([sys.executable, calib_script])
+        else:
+            messagebox.showerror("Archivo no encontrado", f"No se encontró:\n{calib_script}")
 
     def show_board_position_template_modal(self):
         """

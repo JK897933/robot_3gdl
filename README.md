@@ -119,17 +119,44 @@ robot_3gdl/
 ├── CMakeLists.txt                      # CMakeLists principal del proyecto ESP-IDF
 ├── sdkconfig                           # Configuración de periféricos y reloj ESP32-S3
 ├── gui_robot_gato.py                   # Software de Interfaz Gráfica (Python / Tkinter / OpenCV)
+├── calibrador_casillas.py              # Calibrador Teach-In 1:1 y Ajuste de Cinemática Inversa
+├── Plantilla_Gato_Escala_1a1.pdf       # Plantilla vectorial imprimible a escala exacta 1:1
+├── generar_plantilla_pdf_1a1.py        # Generador de la plantilla técnica 1:1 en PDF
+├── casillas_calibradas.json            # Coordenadas y ángulos físicos aprendidos del tablero
 ├── robot_config.json                   # Perfiles mecánicos, cinemáticos y calibración del cero
 ├── robot_marcado_m1_m2_m3.jpg          # Fotografía de referencia con la identificación de motores
 ├── Manual_Robot_3GDL_Gato.pdf          # Manual técnico imprimible de 5 páginas
 ├── generate_pdf_manual.py              # Script en ReportLab para regenerar el PDF
-├── plantilla_gato_escala_1a1.html      # Plantilla imprimible a escala 1:1 del tablero de juego
+├── plantilla_gato_escala_1a1.html      # Plantilla imprimible a escala 1:1 en formato HTML
 ├── requirements.txt                    # Dependencias de librerías de Python
 ├── instalar_dependencias.bat           # Instalador automático en 1 clic
 ├── iniciar_interfaz.bat                # Lanzador de la aplicación en 1 clic
 ├── flashear_firmware_esp32.bat         # Flasheo directo al ESP32 en 1 clic
 └── README.md                           # Documentación técnica completa
 ```
+
+---
+
+## 🎯 Calibración por Aprendizaje (Teach-In 1:1) y Cinemática Inversa
+
+Para garantizar que el efector final caiga exactamente en el centro de cada casilla con 0% de error físico:
+
+1. **Imprimir la Plantilla 1:1:**
+   Abre e imprime el archivo [`Plantilla_Gato_Escala_1a1.pdf`](Plantilla_Gato_Escala_1a1.pdf) en hoja tamaño Carta asegurando seleccionar **Escala 100% (Sin Ajustar / Actual Size)**. Verifica con una regla que la barra de calibración mida exactamente 100 mm.
+2. **Posicionar la Plantilla frente al Robot:**
+   Coloca la plantilla sobre la mesa alineando el eje central con la base giratoria del manipulador.
+3. **Ejecutar el Calibrador:**
+   ```bash
+   python calibrador_casillas.py
+   ```
+4. **Guardar las 9 Casillas:**
+   * Conecta el ESP32 y pulsa **"MOTORES LIBRES (A MANO)"**.
+   * Lleva a mano el efector al centro de la Casilla 1 y pulsa **"Guardar"**.
+   * Repite el proceso para las casillas 2 a 9 y el Dispensador de Fichas.
+5. **Ajustar la Cinemática Inversa:**
+   Pulsa **"CALCULAR CINEMÁTICA INVERSA Y AJUSTAR MODELO"**. El sistema calculará la altura real del plano de la mesa ($Z_{mesa}$), el centro exacto $(X_c, Y_c)$, el espaciado promedio y generará el informe analítico de residuales.
+6. **Verificación:**
+   Pulsa **"RECORRER CASILLAS 1 A 9"** para observar al robot desplazarse automáticamente y alinearse a la perfección con la plantilla física. Todos los datos se sincronizan con `gui_robot_gato.py`.
 
 ---
 
