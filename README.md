@@ -164,3 +164,16 @@ Para garantizar que el efector final caiga exactamente en el centro de cada casi
 * **Estudiante:** Juan Jesus
 * **Correo Institucional:** `up230061@alumnos.upa.edu.mx`
 * **Institución:** Universidad Politécnica de Aguascalientes (UPA)
+* **Fecha de Última Actualización:** 02 de Noviembre de 2026 (00:50 hrs)
+* **Estado del Proyecto:** Operacional al 100% (Firmware en C + GUI Python + Calibrador 1:1 + Manual PDF)
+
+---
+
+## 📅 Historial de Actualizaciones del Repositorio (Changelog)
+
+| Versión / Fecha | Componentes Actualizados | Descripción de Cambios y Mejoras |
+|---|---|---|
+| **v1.3**<br>*(02/11/2026)* | `main/main.c`<br>`sdkconfig`<br>`gui_robot_gato.py` | • **Desactivación de Brownout Detector:** Se eliminó el reinicio por hardware de la ESP32 ante caídas de tensión en cables USB largos o protoboard (`RTC_CNTL_BROWN_OUT_REG = 0`).<br>• **Arranque Seguro con Torque Firme:** Los drivers TB6600 ahora inician energizados por defecto (`ENA = 0`, `g_motor_enabled = true`) en la postura física actual sin saltos ni tics.<br>• **Ajuste del Protocolo Anti-Choque:** Se amplió la ventana a 1.2 segundos y umbral a 0.12° para evitar falsos positivos durante la rampa de arranque del reductor 31:1.<br>• **Diagnóstico de Riel de 3.3V:** Análisis de caídas de tensión por alimentación de encoders AS5600. |
+| **v1.2**<br>*(31/10/2026)* | `calibrador_casillas.py`<br>`Plantilla_Gato_Escala_1a1.pdf`<br>`casillas_calibradas.json` | • **Plantilla Vectorial 1:1 en PDF:** Tablero técnico imprimible con regla física de 100 mm y dianas para las 9 casillas.<br>• **Calibrador Teach-In 1:1:** Aplicación gráfica dedicada para mover el brazo a mano y guardar los ángulos directos de los 3 encoders AS5600.<br>• **Ajuste Analítico de Cinemática Inversa:** Cálculo de centroide $(X_c, Y_c)$, plano de mesa $Z_{mesa}$ y reporte de errores residuales con 0% de error físico. |
+| **v1.1**<br>*(30/10/2026)* | `gui_robot_gato.py`<br>`Manual_Robot_3GDL_Gato.pdf`<br>`robot_config.json` | • **Interfaz Gráfica Clásica:** Panel de control de ingeniería, monitores articulares en tiempo real, simulación 3D interactiva y visión WebCam.<br>• **Filtro Anti-Tics en M3:** Implementación de filtro pasa-bajas EMA e histéresis de banda muerta ampliada para compensar holgura mecánica del codo.<br>• **Manual Técnico en PDF:** Documento de 5 páginas con diagramas esquemáticos, tablas de pines y modelo matemático DH. |
+| **v1.0**<br>*(29/10/2026)* | `main/main.c`<br>`CMakeLists.txt` | • **Firmware Base ESP32-S3:** Control en lazo cerrado para 3 drivers TB6600 por hardware LEDC PWM (timers desacoplados) y 3 buses I2C software dedicados para sensores magnéticos AS5600 a 50 Hz. |
