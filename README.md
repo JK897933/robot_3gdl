@@ -89,6 +89,47 @@ Incluye:
 
 ---
 
+## 🛠️ Diagnóstico Eléctrico y Solución de Fallas Comunes (Troubleshooting)
+
+### ⚠️ Caso Práctico: Caída del Riel de 3.3V a 2.5V y Bucle de Reinicio de Motores
+
+#### 1. Síntoma Observado en Laboratorio:
+* Al conectar la placa **ESP32-S3** por cable USB a la computadora, los 3 motores a pasos entran en un ciclo continuo de **energización y desenergización** (tics rítmicos audibles y pérdida momentánea de torque).
+* Al **desconectar el cable USB de la ESP32**, los motores se quedan **completamente energizados con torque de retención firme**, impidiendo cualquier movimiento manual.
+
+#### 2. Causa Teórica y Lógica de Señal (TB6600 Active-Low):
+Los optoacopladores de los drivers TB6600 en configuración de cátodo común (`ENA-`, `DIR-`, `PUL-` conectados a GND común) trabajan con lógica invertida (**Active-Low**):
+* **`ENA+ = 0V` (o cable desconectado / pin en alta impedancia):** El optoacoplador interno conduce $\rightarrow$ **Driver HABILITADO (Motores con torque activo)**.
+* **`ENA+ = 3.3V`:** El optoacoplador se bloquea $\rightarrow$ **Driver DESHABILITADO (Motores libres)**.
+
+Por ello, al desconectar la ESP32, los pines `ENA` flotan a 0V y la fuente de poder de potencia de los motores mantiene el torque activo. Al conectar la ESP32, si el microcontrolador se reinicia en bucle constante, los pines alternan indefinidamente entre 0V (arranque por hardware) y 3.3V, generando el encendido/apagado intermitente.
+
+#### 3. Diagnóstico con Multímetro y Origen del Fallo:
+1. **Medición del Riel de 3.3V:** Con el multímetro digital midiendo entre el pin `3V3` y `GND` de la ESP32, la tensión colapsó a niveles oscilantes entre **`2.52V` y `2.86V`** (muy por debajo del umbral nominal de 3.30V $\pm 5\%$).
+2. **Brownout Detector:** La ESP32 integra un detector de caídas de tensión (Brownout Detector Level 7 configurado a ~3.125V). Al bajar el riel por debajo de 3.1V, el hardware reinicia la CPU de forma cíclica instantánea.
+3. **Falso Contacto en M3 (Articulación del Codo):** 
+   Al mover y flexionar el arnés de cables del **Encoder 3 (M3 - Codo)** de forma similar al cable de unos audífonos con falso contacto, el sistema se estabilizó de inmediato. Debido al movimiento continuo de la articulación mecánica del codo, los cables jumper DuPont genéricos sufren **fatiga interna del núcleo de cobre**, produciendo microcortos intermitentes entre la línea de alimentación de 3.3V y tierra que derribaban el riel principal.
+
+#### 4. Medidas Correctivas Aplicadas:
+
+##### A. Solución de Hardware (Alivio de Tensión Mecánica):
+* **Fijación con Silicón Caliente (Strain Relief):** Se aplicó silicón caliente sobre la base de los pines conectores del sensor AS5600 y los puntos de curvatura del eslabón móvil. Esto inmoviliza los cables en su zona de estrés y evita la fatiga por flexión mecánica durante los movimientos del brazo.
+* **Comprobación de Rieles con Multímetro:** 
+  * Pin `5V/VIN`: Debe marcar $\ge 4.85\text{ V}$ desde el bus USB.
+  * Pin `3V3`: Debe marcar $3.30\text{ V} \pm 0.05\text{ V}$ con los 3 encoders magnéticos operando a 250 kHz.
+
+##### B. Solución de Firmware (ESP-IDF v6.1):
+Para asegurar tolerancia ante caídas de tensión transitorias en cables USB largos o protoboards:
+1. **Desactivación de Brownout por Registro:** En [`main/main.c`](file:///e:/proyecto%20anaya/robot_3gdl/main/main.c):
+   ```c
+   // Desactivar hardware brownout reset para evitar reboots ante picos de demanda
+   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+   ```
+2. **Arranque Seguro en Lazo Cerrado:** El firmware inicializa los drivers directamente con `ENA = 0` (energizados) y registra la postura física actual como referencia objetivo antes de habilitar el control PID/LEDC, eliminando saltos o caídas de los eslabones al energizar.
+3. **Tolerancia Anti-Stall Ampliada:** La ventana temporal del detector de colisiones se ajustó a 1200 ms con umbral de 0.12° para compensar holguras y desaceleraciones de los reductores cicloidales 31:1.
+
+---
+
 ## 🧮 Modelado Cinemático y Cinemática Inversa
 
 El robot posee configuración antropomórfica RRR desacoplada:
@@ -162,8 +203,8 @@ Para garantizar que el efector final caiga exactamente en el centro de cada casi
 * **Estudiante:** Juan Jesus
 * **Correo Institucional:** `up230061@alumnos.upa.edu.mx`
 * **Institución:** Universidad Politécnica de Aguascalientes (UPA)
-* **Fecha de Última Actualización:** 02 de Noviembre de 2026 (00:50 hrs)
-* **Estado del Proyecto:** Operacional al 100% (Firmware en C + GUI Python + Calibrador 1:1 + Manual PDF)
+* **Fecha de Última Actualización:** 02 de Noviembre de 2026 (01:15 hrs)
+* **Estado del Proyecto:** Operacional al 100% (Firmware en C + GUI Python + Calibrador 1:1 + Manual PDF + Guía de Troubleshooting)
 
 ---
 
@@ -171,7 +212,7 @@ Para garantizar que el efector final caiga exactamente en el centro de cada casi
 
 | Versión / Fecha | Componentes Actualizados | Descripción de Cambios y Mejoras |
 |---|---|---|
-| **v1.3**<br>*(02/11/2026)* | `main/main.c`<br>`sdkconfig`<br>`gui_robot_gato.py` | • **Desactivación de Brownout Detector:** Se eliminó el reinicio por hardware de la ESP32 ante caídas de tensión en cables USB largos o protoboard (`RTC_CNTL_BROWN_OUT_REG = 0`).<br>• **Arranque Seguro con Torque Firme:** Los drivers TB6600 ahora inician energizados por defecto (`ENA = 0`, `g_motor_enabled = true`) en la postura física actual sin saltos ni tics.<br>• **Ajuste del Protocolo Anti-Choque:** Se amplió la ventana a 1.2 segundos y umbral a 0.12° para evitar falsos positivos durante la rampa de arranque del reductor 31:1.<br>• **Diagnóstico de Riel de 3.3V:** Análisis de caídas de tensión por alimentación de encoders AS5600. |
+| **v1.3**<br>*(02/11/2026)* | `README.md`<br>`main/main.c`<br>`sdkconfig`<br>`gui_robot_gato.py` | • **Diagnóstico Eléctrico y Troubleshooting:** Documentación técnica completa sobre el colapso del riel de 3.3V a 2.5V por falso contacto/corto en cables móviles del Encoder 3 (M3 Codo), lógica Active-Low de drivers TB6600 y alivio de tensión con silicón caliente.<br>• **Desactivación de Brownout Detector:** Se eliminó el reinicio por hardware de la ESP32 ante caídas de tensión en cables USB largos o protoboard (`RTC_CNTL_BROWN_OUT_REG = 0`).<br>• **Arranque Seguro con Torque Firme:** Los drivers TB6600 ahora inician energizados por defecto (`ENA = 0`, `g_motor_enabled = true`) en la postura física actual sin saltos ni tics.<br>• **Ajuste del Protocolo Anti-Choque:** Se amplió la ventana a 1.2 segundos y umbral a 0.12° para evitar falsos positivos durante la rampa de arranque del reductor 31:1. |
 | **v1.2**<br>*(31/10/2026)* | `calibrador_casillas.py`<br>`Plantilla_Gato_Escala_1a1.pdf`<br>`casillas_calibradas.json` | • **Plantilla Vectorial 1:1 en PDF:** Tablero técnico imprimible con regla física de 100 mm y dianas para las 9 casillas.<br>• **Calibrador Teach-In 1:1:** Aplicación gráfica dedicada para mover el brazo a mano y guardar los ángulos directos de los 3 encoders AS5600.<br>• **Ajuste Analítico de Cinemática Inversa:** Cálculo de centroide $(X_c, Y_c)$, plano de mesa $Z_{mesa}$ y reporte de errores residuales con 0% de error físico. |
 | **v1.1**<br>*(30/10/2026)* | `gui_robot_gato.py`<br>`Manual_Robot_3GDL_Gato.pdf`<br>`robot_config.json` | • **Interfaz Gráfica Clásica:** Panel de control de ingeniería, monitores articulares en tiempo real, simulación 3D interactiva y visión WebCam.<br>• **Filtro Anti-Tics en M3:** Implementación de filtro pasa-bajas EMA e histéresis de banda muerta ampliada para compensar holgura mecánica del codo.<br>• **Manual Técnico en PDF:** Documento de 5 páginas con diagramas esquemáticos, tablas de pines y modelo matemático DH. |
 | **v1.0**<br>*(29/10/2026)* | `main/main.c`<br>`CMakeLists.txt` | • **Firmware Base ESP32-S3:** Control en lazo cerrado para 3 drivers TB6600 por hardware LEDC PWM (timers desacoplados) y 3 buses I2C software dedicados para sensores magnéticos AS5600 a 50 Hz. |
