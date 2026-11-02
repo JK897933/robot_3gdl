@@ -11,6 +11,8 @@
 #include "hal/usb_serial_jtag_ll.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "soc/rtc_cntl_reg.h"
+#include "soc/soc.h"
 #include <fcntl.h>
 #include <math.h>
 #include <stdarg.h>
@@ -623,11 +625,11 @@ static esp_err_t steppers_hardware_init(void) {
     return err;
 
   gpio_set_level(M1_PIN_DIR, 0);
-  gpio_set_level(M1_PIN_ENA, 1); // 1 = Deshabilitado / Libre al arranque
+  gpio_set_level(M1_PIN_ENA, 0); // 0 = ENA activo cátodo común (Energizado con torque firme al arranque)
   gpio_set_level(M2_PIN_DIR, 0);
-  gpio_set_level(M2_PIN_ENA, 1);
+  gpio_set_level(M2_PIN_ENA, 0);
   gpio_set_level(M3_PIN_DIR, 0);
-  gpio_set_level(M3_PIN_ENA, 1);
+  gpio_set_level(M3_PIN_ENA, 0);
   gpio_set_level(PIN_TOOL_GRIPPER, 0);
 
   // Configurar 3 Timers LEDC independientes (Timer 0, Timer 1, Timer 2)
@@ -994,14 +996,14 @@ static void steppers_control_task(void *pvParameters) {
 
           // -------------------------------------------------------------
           // PROTOCOLO ANTI-CHOQUE / DETECCIÓN DE ATASCO POR ENCODER AS5600:
-          // Si el motor genera pulsos (velocidad >= 120 Hz) durante 500 ms
-          // pero el encoder NO se desplaza al menos 0.25°, se detecta atasco o choque.
+          // Si el motor genera pulsos (velocidad >= 120 Hz) durante 1.2 segundos
+          // pero el encoder NO se desplaza al menos 0.12° (en salida 31:1), se detecta atasco o choque.
           // -------------------------------------------------------------
           if (current_running_speed[i] >= 120.0f) {
             s_stall_timer_ms[i] += 20; // 50 Hz -> 20 ms
-            if (s_stall_timer_ms[i] >= 500) {
+            if (s_stall_timer_ms[i] >= 1200) {
               float delta_move = fabsf(r.calibrated_deg - s_stall_ref_deg[i]);
-              if (delta_move < 0.25f) {
+              if (delta_move < 0.12f) {
                 // ¡COLISIÓN O ATASCO DETECTADO! Frenado de emergencia inmediato
                 s_motor_stalled[i] = true;
                 stepper_set_hw_speed(i, 0, current_dir[i]);
@@ -1196,6 +1198,10 @@ static void play_cell_sequence_task(void *pvParameters) {
 // 10. APP_MAIN (INICIALIZACIÓN, PARSER DE COMANDOS Y TELEMETRÍA)
 // ==============================================================================
 void app_main(void) {
+  // Deshabilitar detector de brownout por hardware para evitar bucle de reinicios continuos
+  // por caídas de tensión en cables USB largos o protoboards
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
   ESP_LOGI(TAG, "==========================================================");
   ESP_LOGI(TAG,
            "   ROBOT 3 GDL JUGADOR DE GATO (ESP32-S3 + 3x TB6600 + 3x AS5600)");
@@ -1297,10 +1303,9 @@ void app_main(void) {
   ESP_ERROR_CHECK(steppers_hardware_init());
   for (int i = 0; i < NUM_MOTORS; i++) {
     stepper_set_hw_speed(i, 0, 0);
-    stepper_set_enable(i, false);
+    stepper_set_enable(i, true);
   }
-  ESP_LOGI(TAG, "Drivers Steppers TB6600 inicializados en reposo (Modo libre "
-                "sin torque al arranque).");
+  ESP_LOGI(TAG, "Drivers Steppers TB6600 inicializados con torque de retención firme.");
 
   // Pre-leer encoders y sincronizar objetivo con la postura física actual
   // Garantiza 0% brincos o giros descontrolados de 360° al encender
@@ -1310,7 +1315,7 @@ void app_main(void) {
     g_last_reading[m] = r;
     g_target_deg[m] =
         r.calibrated_deg; // Objetivo = Medición actual -> Error inicial = 0.0°
-    g_motor_enabled[m] = false; // Motores libres hasta que el usuario decida
+    g_motor_enabled[m] = true; // Motores energizados y firmes en su postura actual
   }
 
   // 4. Periférico UART (115200 Baudios, 8N1, Buffer Circular 1024 Bytes)

@@ -249,3 +249,4 @@ def draw_plantilla(filename="Plantilla_Gato_Escala_1a1.pdf"):
 
 if __name__ == "__main__":
     draw_plantilla()
+
