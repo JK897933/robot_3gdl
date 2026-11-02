@@ -120,18 +120,17 @@ robot_3gdl/
 ├── sdkconfig                           # Configuración de periféricos y reloj ESP32-S3
 ├── gui_robot_gato.py                   # Software de Interfaz Gráfica (Python / Tkinter / OpenCV)
 ├── calibrador_casillas.py              # Calibrador Teach-In 1:1 y Ajuste de Cinemática Inversa
-├── Plantilla_Gato_Escala_1a1.pdf       # Plantilla vectorial imprimible a escala exacta 1:1
-├── generar_plantilla_pdf_1a1.py        # Generador de la plantilla técnica 1:1 en PDF
+├── test_encoders.py                    # Diagnóstico interactivo de encoders AS5600
+├── Plantilla_Gato_Escala_1a1.pdf       # Plantilla técnica imprimible a escala exacta 1:1
+├── Manual_Robot_3GDL_Gato.pdf          # Manual técnico imprimible de 5 páginas
 ├── casillas_calibradas.json            # Coordenadas y ángulos físicos aprendidos del tablero
 ├── robot_config.json                   # Perfiles mecánicos, cinemáticos y calibración del cero
 ├── robot_marcado_m1_m2_m3.jpg          # Fotografía de referencia con la identificación de motores
-├── Manual_Robot_3GDL_Gato.pdf          # Manual técnico imprimible de 5 páginas
-├── generate_pdf_manual.py              # Script en ReportLab para regenerar el PDF
-├── plantilla_gato_escala_1a1.html      # Plantilla imprimible a escala 1:1 en formato HTML
 ├── requirements.txt                    # Dependencias de librerías de Python
 ├── instalar_dependencias.bat           # Instalador automático en 1 clic
 ├── iniciar_interfaz.bat                # Lanzador de la aplicación en 1 clic
 ├── flashear_firmware_esp32.bat         # Flasheo directo al ESP32 en 1 clic
+├── subir_a_github.bat                  # Sincronización automática con GitHub en 1 clic
 └── README.md                           # Documentación técnica completa
 ```
 

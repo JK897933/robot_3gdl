@@ -330,13 +330,8 @@ class CalibradorCasillasApp(tk.Tk):
 
     def open_pdf_template(self):
         if not os.path.exists(self.pdf_template_path):
-            # Si no existe, generarla al instante
-            try:
-                import generar_plantilla_pdf_1a1
-                generar_plantilla_pdf_1a1.draw_plantilla(self.pdf_template_path)
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo generar la plantilla PDF:\n{e}")
-                return
+            messagebox.showerror("Archivo no encontrado", f"No se encontró la plantilla PDF:\n{self.pdf_template_path}")
+            return
 
         try:
             if sys.platform.startswith("win"):

@@ -4230,10 +4230,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
         refresh_modal()
 
     def open_printable_template(self):
-        """Abre la plantilla física a escala 1:1 en PDF o navegador para imprimir en papel."""
-        import os, webbrowser, subprocess
+        """Abre la plantilla física a escala 1:1 en PDF para imprimir en papel."""
+        import os, subprocess
         pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Plantilla_Gato_Escala_1a1.pdf")
-        html_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plantilla_gato_escala_1a1.html")
         if os.path.exists(pdf_path):
             try:
                 if sys.platform.startswith("win"):
@@ -4241,11 +4240,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 else:
                     subprocess.Popen(["xdg-open", pdf_path])
                 return
-            except Exception:
-                pass
-        if os.path.exists(html_path):
-            path_url = html_path.replace("\\", "/")
-            webbrowser.open(f"file:///{path_url}")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo abrir el PDF:\n{e}")
         else:
             messagebox.showerror("Archivo no encontrado", f"No se encontró el archivo:\n{pdf_path}")
 
