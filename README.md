@@ -130,7 +130,6 @@ robot_3gdl/
 ├── instalar_dependencias.bat           # Instalador automático en 1 clic
 ├── iniciar_interfaz.bat                # Lanzador de la aplicación en 1 clic
 ├── flashear_firmware_esp32.bat         # Flasheo directo al ESP32 en 1 clic
-├── subir_a_github.bat                  # Sincronización automática con GitHub en 1 clic
 └── README.md                           # Documentación técnica completa
 ```
 
