@@ -3,7 +3,7 @@
     "profiles": {
         "Robot MK2 Gato 31:1 (Predeterminado)": {
             "name": "Robot MK2 Gato 31:1 (Predeterminado)",
-            "description": "Configuraci\u00f3n est\u00e1ndar SolidWorks con reductores cicloidales 31:1 y electroim\u00e1n en GPIO 7",
+            "description": "Configuración estándar SolidWorks con reductores cicloidales 31:1 y electroimán en GPIO 7",
             "date": "2026-10-30",
             "geometry": {
                 "d1": 10.0,
@@ -45,7 +45,7 @@
         },
         "Robot Prototipo Compacto (Laboratorio)": {
             "name": "Robot Prototipo Compacto (Laboratorio)",
-            "description": "Perfil de prueba con eslabones cortos y velocidad reducida para m\u00e1xima seguridad",
+            "description": "Perfil de prueba con eslabones cortos y velocidad reducida para máxima seguridad",
             "date": "2026-10-30",
             "geometry": {
                 "d1": 8.0,
