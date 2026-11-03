@@ -179,8 +179,8 @@ class RobotMK2Kinematics:
         # que la tuerca/tornillo de la articulación colisione físicamente contra M2 (Brazo).
         self.limits = [
             (-60.0, 60.0),   # J1 (Base - Yaw): Giro seguro [-60°, +60°]
-            (0.0, 95.0),     # J2 (Hombro - Pitch): Elevación segura [0°, 95°]
-            (-115.0, 5.0)    # J3 (Codo - Pitch): Flexión segura [-115°, +5°] (Protección colisión tuerca M2-M3)
+            (-60.0, 45.0),   # J2 (Hombro - Pitch): Inclinación hacia mesa [-60°, +45°]
+            (-90.0, 45.0)    # J3 (Codo - Pitch): Flexión hacia mesa [-90°, +45°]
         ]
         self.nut_collision_margin_deg = 5.0  # Margen de alerta temprana de colisión
 
@@ -495,10 +495,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.zero_calibrated = False
         self.motors_free_state = True   # Al encender los motores arrancan libres (sin torque)
 
-        # Coordenadas Cartesianas actuales (cm)
-        self.cart_x = 26.0
+        # Coordenadas Cartesianas actuales (cm) - Tablero en la mesa Z=-29.1 cm
+        self.cart_x = 55.0
         self.cart_y = 0.0
-        self.cart_z = 3.0
+        self.cart_z = -29.1
         self.last_ik_error_pos = 0.0
 
         # Disposición espacial de las 9 casillas del tablero de Gato y Dispensador
@@ -1279,7 +1279,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 self.set_status_text(f" Ejecutando Pick & Place en Casilla {cell_idx+1}...", fg=COLOR_CYAN_ACCENT)
                 threading.Thread(target=self.run_robot_animation_turn, args=(cell_idx,), daemon=True).start()
         elif mode == "hover":
-            target_z = 8.0
+            target_z = cz + 6.0
             angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, target_z, elbow_up=True)
             if not reachable:
                 self.lbl_ik_status.config(text=f"Casilla {cell_idx+1} [Hover]: {msg}", fg=COLOR_RED_DANGER)
@@ -1525,7 +1525,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 self.active_tour_cell = cell_idx
                 cx, cy, cz = self.cell_coords[cell_idx]
                 mode = self.cell_action_mode.get() if hasattr(self, 'cell_action_mode') else "place"
-                target_z = 8.0 if mode == "hover" else cz
+                target_z = (cz + 6.0) if mode == "hover" else cz
 
                 angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, target_z, elbow_up=True)
 

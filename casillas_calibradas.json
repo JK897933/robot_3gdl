@@ -1,0 +1,150 @@
+{
+    "profile_name": "Mi Robot Gato MK2 (Base en Caja)",
+    "description": "Calibracion fija establecida con base elevada en caja y tablero en mesa Z=-29.1cm",
+    "date": "2026-11-03 15:45:00",
+    "table_z": -29.1,
+    "hover_z": -23.1,
+    "link_lengths": {
+        "d1": 10.0,
+        "a1": 11.0,
+        "a2": 32.922,
+        "a3": 32.934
+    },
+    "home_zero_angles": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "cells": {
+        "1": {
+            "angles": [
+                4.33,
+                -20.21,
+                -37.12
+            ],
+            "cartesian": [
+                59.5,
+                4.5,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "2": {
+            "angles": [
+                0.0,
+                -19.95,
+                -37.84
+            ],
+            "cartesian": [
+                59.5,
+                0.0,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "3": {
+            "angles": [
+                -4.33,
+                -20.21,
+                -37.12
+            ],
+            "cartesian": [
+                59.5,
+                -4.5,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "4": {
+            "angles": [
+                4.68,
+                -15.13,
+                -52.75
+            ],
+            "cartesian": [
+                55.0,
+                4.5,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "5": {
+            "angles": [
+                0.0,
+                -14.98,
+                -53.29
+            ],
+            "cartesian": [
+                55.0,
+                0.0,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "6": {
+            "angles": [
+                -4.68,
+                -15.13,
+                -52.75
+            ],
+            "cartesian": [
+                55.0,
+                -4.5,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "7": {
+            "angles": [
+                5.09,
+                -12.35,
+                -64.42
+            ],
+            "cartesian": [
+                50.5,
+                4.5,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "8": {
+            "angles": [
+                0.0,
+                -12.26,
+                -64.88
+            ],
+            "cartesian": [
+                50.5,
+                0.0,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "9": {
+            "angles": [
+                -5.09,
+                -12.35,
+                -64.42
+            ],
+            "cartesian": [
+                50.5,
+                -4.5,
+                -29.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        },
+        "pick": {
+            "angles": [
+                -19.8,
+                -7.99,
+                -65.17
+            ],
+            "cartesian": [
+                50.0,
+                -18.0,
+                -26.1
+            ],
+            "recorded_at": "Establecido Fijo"
+        }
+    }
+}
