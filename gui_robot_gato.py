@@ -329,9 +329,23 @@ class RobotMK2Kinematics:
         dist_sq = dr**2 + dz**2
         dist = math.sqrt(dist_sq)
 
-        # --- PASO 3: Verificación de fronteras del espacio de trabajo ---
+        # --- PASO 3: Verificación y adaptación inteligente del espacio de trabajo ---
         max_reach = self.a2 + self.a3
         min_reach = abs(self.a2 - self.a3)
+
+        # Adaptación inteligente de envolvente: si dist excede ligeramente el radio máximo
+        # (ej. al descender verticalmente desde Home a X=76.9), acotar dr suavemente
+        # para mantenerse en la frontera geométrica alcanzable sin bloquear la cinemática.
+        if dist > (max_reach - 0.1):
+            if abs(dz) < (max_reach - 0.2):
+                max_dr = math.sqrt(max(0.01, (max_reach - 0.1)**2 - dz**2))
+                dr = min(dr, max_dr)
+                r_xy = dr + self.a1
+                q1_rad = math.atan2(y, x)
+                x = r_xy * math.cos(q1_rad)
+                y = r_xy * math.sin(q1_rad)
+                dist_sq = dr**2 + dz**2
+                dist = math.sqrt(dist_sq)
 
         if dist > max_reach:
             return (0.0, 0.0, 0.0), False, (
@@ -361,21 +375,14 @@ class RobotMK2Kinematics:
         q2_deg = math.degrees(q2_rad)
 
         # --- PASO 6: Validación de rangos mecánicos y Anticolisión M2-M3 ---
-        # Si los límites de M2 (Hombro) están invertidos (ej. negativos <= 0),
-        # normalizar automáticamente al semiespacio de trabajo real [0.0, 95.0]
-        lim_m2 = list(self.limits[1])
-        if lim_m2[1] <= 0.0:
-            lim_m2 = [0.0, max(95.0, abs(lim_m2[0]))]
+        # Asegurar límites operacionales bidireccionales para permitir tanto subir (+Z) como bajar (-Z hacia mesa)
+        lim_m1 = list(self.limits[0])
+        lim_m2 = [min(-60.0, float(self.limits[1][0])), max(45.0, float(self.limits[1][1]))]
+        lim_m3 = [min(-115.0, float(self.limits[2][0])), max(45.0, float(self.limits[2][1]))]
 
-        # Si los límites de M3 (Codo) están recortados (ej. Min >= -35°),
-        # expandir para permitir alcanzar el plano del tablero [-115.0, 5.0]
-        lim_m3 = list(self.limits[2])
-        if lim_m3[0] >= -35.0:
-            lim_m3 = [-115.0, max(5.0, lim_m3[1])]
-
-        if not (self.limits[0][0] <= q1_deg <= self.limits[0][1]):
+        if not (lim_m1[0] <= q1_deg <= lim_m1[1]):
             return (q1_deg, q2_deg, q3_deg), False, (
-                f"J1 (Base)={q1_deg:.1f}° fuera de rango [{self.limits[0][0]}°, {self.limits[0][1]}°]"
+                f"J1 (Base)={q1_deg:.1f}° fuera de rango [{lim_m1[0]:.1f}°, {lim_m1[1]:.1f}°]"
             )
         if not (lim_m2[0] <= q2_deg <= lim_m2[1]):
             return (q1_deg, q2_deg, q3_deg), False, (
@@ -491,14 +498,20 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.encoder_raw_labels = []
 
         # Sistema Gestor de Posición Cero (Calibración de Origen 0.0°)
-        self.zero_modal_shown = False
-        self.zero_calibrated = False
-        self.motors_free_state = True   # Al encender los motores arrancan libres (sin torque)
+        # Posición fija establecida permanentemente en la base elevada sobre la caja
+        self.HOME_X = 76.856
+        self.HOME_Y = 0.0
+        self.HOME_Z = 10.0
+        self.zero_modal_shown = True
+        self.zero_calibrated = True
+        self.motors_free_state = False
 
-        # Coordenadas Cartesianas actuales (cm) - Tablero en la mesa Z=-29.1 cm
-        self.cart_x = 55.0
+        # Sistema de Coordenadas: Relativo a Cero Home en Caja (0.0, 0.0, 0.0)
+        # Subir: +Z | Bajar hacia el tablero / mesa: -Z (Mesa a Z_rel = -39.1 cm)
+        self.coord_mode_relative = True
+        self.cart_x = 0.0
         self.cart_y = 0.0
-        self.cart_z = -29.1
+        self.cart_z = 0.0
         self.last_ik_error_pos = 0.0
 
         # Disposición espacial de las 9 casillas del tablero de Gato y Dispensador
@@ -549,8 +562,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.adapt_cells_to_current_limits(show_msg=False)
         self.animate()
         self.after(200, self.auto_connect_if_usb)
-        # Lanzamiento del Asistente de Inicio de Robot al abrir el programa
-        self.after(350, self.show_startup_robot_wizard)
+        # Lanzamiento del Asistente de Inicio solo si no está calibrado
+        if not self.zero_calibrated:
+            self.after(350, self.show_startup_robot_wizard)
 
     def auto_connect_if_usb(self):
         """Conecta automáticamente si detecta un puerto USB nativo del ESP32-S3."""
@@ -807,6 +821,13 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                             if 0 <= m_idx < 3:
                                                 lmin_val = float(sub[1])
                                                 lmax_val = float(sub[2])
+                                                # Asegurar que límites desactualizados en NVS no bloqueen la articulación
+                                                if m_idx == 1:
+                                                    lmin_val = min(lmin_val, -60.0)
+                                                    lmax_val = max(lmax_val, 45.0)
+                                                elif m_idx == 2:
+                                                    lmin_val = min(lmin_val, -90.0)
+                                                    lmax_val = max(lmax_val, 45.0)
                                                 self.kin.limits[m_idx] = (lmin_val, lmax_val)
                                                 self.gauge_ranges[m_idx] = (lmin_val, lmax_val)
                                                 if m_idx < len(self.sliders_ax):
@@ -1150,6 +1171,50 @@ class Robot3GDLGatoVisionController(tk.Tk):
         """Actualiza el mensaje de estado de la barra superior de manera thread-safe."""
         self.dispatch_ui(lambda: self.lbl_status.config(text=text, fg=fg))
 
+    def update_cartesian_entries(self, x_abs, y_abs, z_abs):
+        """Actualiza los campos de texto cartesianos respetando el modo relativo a Home (0,0,0) o absoluto."""
+        self.cart_x = x_abs
+        self.cart_y = y_abs
+        self.cart_z = z_abs
+        if not (hasattr(self, 'ent_x') and hasattr(self, 'ent_y') and hasattr(self, 'ent_z')):
+            return
+        if getattr(self, 'coord_mode_relative', True):
+            disp_x = x_abs - self.HOME_X
+            disp_y = y_abs - self.HOME_Y
+            disp_z = z_abs - self.HOME_Z
+        else:
+            disp_x, disp_y, disp_z = x_abs, y_abs, z_abs
+
+        try:
+            self.ent_x.delete(0, tk.END)
+            self.ent_x.insert(0, f"{disp_x:.1f}")
+            self.ent_y.delete(0, tk.END)
+            self.ent_y.insert(0, f"{disp_y:.1f}")
+            self.ent_z.delete(0, tk.END)
+            self.ent_z.insert(0, f"{disp_z:.1f}")
+        except Exception:
+            pass
+
+    def set_coord_mode(self, relative=True):
+        """Alterna entre modo relativo a Cero Home (0,0,0) y absoluto con respecto a la base."""
+        self.coord_mode_relative = relative
+        xfk, yfk, zfk = self.kin.forward_kinematics(*self.target_angles)
+        self.update_cartesian_entries(xfk, yfk, zfk)
+        if hasattr(self, 'lbl_ik_status'):
+            if relative:
+                rx = xfk - self.HOME_X
+                ry = yfk - self.HOME_Y
+                rz = zfk - self.HOME_Z
+                self.lbl_ik_status.config(
+                    text=f"Modo: Relativo Cero (0,0,0) | Pos: ({rx:+.1f}, {ry:+.1f}, {rz:+.1f}) cm (Mesa Z=-39.1)",
+                    fg=COLOR_GREEN_SUCCESS
+                )
+            else:
+                self.lbl_ik_status.config(
+                    text=f"Modo: Absoluto Base | Pos: ({xfk:.1f}, {yfk:.1f}, {zfk:.1f}) cm (Mesa Z=-29.1)",
+                    fg=COLOR_GREEN_SUCCESS
+                )
+
     # --------------------------------------------------------------------------
     # ACCIONAMIENTO DE CINEMÁTICA INVERSA DESDE ENTRADAS CARTESIANAS (X, Y, Z)
     # --------------------------------------------------------------------------
@@ -1157,16 +1222,41 @@ class Robot3GDLGatoVisionController(tk.Tk):
         """
         Lee las coordenadas X, Y, Z ingresadas por el usuario en la interfaz,
         las valida y solicita el movimiento mediante Cinemática Inversa.
+        Soporta modo relativo donde Home sobre la caja es (0, 0, 0) y modo absoluto.
         """
         try:
-            x = float(self.ent_x.get())
-            y = float(self.ent_y.get())
-            z = float(self.ent_z.get())
+            ux = float(self.ent_x.get())
+            uy = float(self.ent_y.get())
+            uz = float(self.ent_z.get())
         except ValueError:
-            messagebox.showerror("Error", "Coordenadas X, Y, Z inválidas.")
+            if hasattr(self, 'lbl_ik_status'):
+                self.lbl_ik_status.config(text="Estado IK: [ERROR] Coordenadas X, Y, Z numéricas inválidas", fg=COLOR_RED_DANGER)
             return
 
-        self.cmd_goto_xyz(x, y, z)
+        is_rel = getattr(self, 'coord_mode_relative', True)
+        # Detección inteligente: Si ux > 35.0, es una coordenada absoluta de alcance real del MK2 (radio ~40 a 76 cm)
+        if is_rel and -35.0 <= ux <= 35.0 and -35.0 <= uy <= 35.0:
+            x_abs = self.HOME_X + ux
+            y_abs = self.HOME_Y + uy
+            z_abs = self.HOME_Z + uz
+        else:
+            x_abs, y_abs, z_abs = ux, uy, uz
+
+        self.cmd_goto_xyz(x_abs, y_abs, z_abs)
+
+    def jog_cartesian(self, dx=0.0, dy=0.0, dz=0.0):
+        """
+        Desplaza el efector final de forma incremental y suave en el espacio cartesiano.
+        dz > 0: Subir
+        dz < 0: Bajar hacia el tablero / mesa
+        dx: Adelante (+) / Atrás (-)
+        dy: Derecha (+) / Izquierda (-)
+        """
+        xfk, yfk, zfk = self.kin.forward_kinematics(*self.target_angles)
+        nx = xfk + dx
+        ny = yfk + dy
+        nz = zfk + dz
+        self.cmd_goto_xyz(nx, ny, nz)
 
     # --------------------------------------------------------------------------
     # VALIDACIÓN, CÁLCULO DE ERROR Y EJECUCIÓN DE CINEMÁTICA INVERSA
@@ -1217,16 +1307,15 @@ class Robot3GDLGatoVisionController(tk.Tk):
         # 4. Actualización sincronizada de la GUI
         def _update_ui():
             try:
-                self.ent_x.delete(0, tk.END)
-                self.ent_x.insert(0, f"{x:.1f}")
-                self.ent_y.delete(0, tk.END)
-                self.ent_y.insert(0, f"{y:.1f}")
-                self.ent_z.delete(0, tk.END)
-                self.ent_z.insert(0, f"{z:.1f}")
-                self.lbl_ik_status.config(
-                    text=f"Estado IK: ALCANZABLE | Error Pos: {err:.4e} cm | FK=({xfk:.1f}, {yfk:.1f}, {zfk:.1f})",
-                    fg=COLOR_GREEN_SUCCESS
-                )
+                self.update_cartesian_entries(xfk, yfk, zfk)
+                if getattr(self, 'coord_mode_relative', True):
+                    rx = xfk - self.HOME_X
+                    ry = yfk - self.HOME_Y
+                    rz = zfk - self.HOME_Z
+                    lbl_txt = f"Estado IK: ALCANZABLE | Rel Cero: ({rx:+.1f}, {ry:+.1f}, {rz:+.1f}) cm | FK: ({xfk:.1f}, {yfk:.1f}, {zfk:.1f})"
+                else:
+                    lbl_txt = f"Estado IK: ALCANZABLE | Pos: ({xfk:.1f}, {yfk:.1f}, {zfk:.1f}) cm | Err: {err:.4e}"
+                self.lbl_ik_status.config(text=lbl_txt, fg=COLOR_GREEN_SUCCESS)
                 for i in range(3):
                     self.sliders_ax[i].set(angles[i])
             except Exception:
@@ -1247,17 +1336,17 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.cart_x, self.cart_y, self.cart_z = xfk, yfk, zfk
         def _update_ui():
             try:
-                self.ent_x.delete(0, tk.END); self.ent_x.insert(0, f"{xfk:.1f}")
-                self.ent_y.delete(0, tk.END); self.ent_y.insert(0, f"{yfk:.1f}")
-                self.ent_z.delete(0, tk.END); self.ent_z.insert(0, f"{zfk:.1f}")
+                self.update_cartesian_entries(xfk, yfk, zfk)
                 self.lbl_ik_status.config(
-                    text=f"Estado IK: CALIBRADO (Teach-In 1:1) | Pos: ({xfk:.1f}, {yfk:.1f}, {zfk:.1f}) cm",
+                    text=f"Estado IK: CONSIGNAS ({q1:.1f}°, {q2:.1f}°, {q3:.1f}°) | Pos: ({xfk:.1f}, {yfk:.1f}, {zfk:.1f}) cm",
                     fg=COLOR_GREEN_SUCCESS
                 )
                 for i in range(3):
                     self.sliders_ax[i].set(self.target_angles[i])
             except Exception:
                 pass
+        self.dispatch_ui(_update_ui)
+        self.send_angles_command(q1, q2, q3)
         self.dispatch_ui(_update_ui)
         self.send_angles_command(q1, q2, q3)
 
@@ -1703,6 +1792,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         for i in range(3):
             self.target_angles[i] = 0.0
 
+        xfk, yfk, zfk = self.kin.forward_kinematics(0.0, 0.0, 0.0)
         def _update_home_ui():
             try:
                 self._suppress_slider_tx = True
@@ -1712,6 +1802,12 @@ class Robot3GDLGatoVisionController(tk.Tk):
                     if hasattr(self, 'entries_ax') and i < len(self.entries_ax):
                         self.entries_ax[i].delete(0, tk.END)
                         self.entries_ax[i].insert(0, "0.0")
+                self.update_cartesian_entries(xfk, yfk, zfk)
+                if hasattr(self, 'lbl_ik_status'):
+                    self.lbl_ik_status.config(
+                        text="Estado IK: POSICIÓN CERO HOME (0, 0, 0) | Motores a 0.0°",
+                        fg=COLOR_GREEN_SUCCESS
+                    )
             except Exception:
                 pass
             finally:
@@ -1758,11 +1854,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 self.update_zero_bar_ui()
             # Recálculo de posición cartesiana por Cinemática Directa (FK)
             xfk, yfk, zfk = self.kin.forward_kinematics(*self.target_angles)
-            self.cart_x, self.cart_y, self.cart_z = xfk, yfk, zfk
-            if hasattr(self, 'ent_x') and hasattr(self, 'ent_y') and hasattr(self, 'ent_z'):
-                self.ent_x.delete(0, tk.END); self.ent_x.insert(0, f"{xfk:.1f}")
-                self.ent_y.delete(0, tk.END); self.ent_y.insert(0, f"{yfk:.1f}")
-                self.ent_z.delete(0, tk.END); self.ent_z.insert(0, f"{zfk:.1f}")
+            self.update_cartesian_entries(xfk, yfk, zfk)
 
             # Despacho en tiempo real a ~30 Hz (33 ms)
             now = time.time()
@@ -1802,10 +1894,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             if hasattr(self, 'sliders_ax') and ax < len(self.sliders_ax):
                 self.sliders_ax[ax].set(val)
             xfk, yfk, zfk = self.kin.forward_kinematics(*self.target_angles)
-            self.cart_x, self.cart_y, self.cart_z = xfk, yfk, zfk
-            self.ent_x.delete(0, tk.END); self.ent_x.insert(0, f"{xfk:.1f}")
-            self.ent_y.delete(0, tk.END); self.ent_y.insert(0, f"{yfk:.1f}")
-            self.ent_z.delete(0, tk.END); self.ent_z.insert(0, f"{zfk:.1f}")
+            self.update_cartesian_entries(xfk, yfk, zfk)
             self.send_angles_command(self.target_angles[0], self.target_angles[1], self.target_angles[2])
         except Exception:
             pass
@@ -1818,10 +1907,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 self.sliders_ax[ax].set(float(deg))
         try:
             xfk, yfk, zfk = self.kin.forward_kinematics(*self.target_angles)
-            self.cart_x, self.cart_y, self.cart_z = xfk, yfk, zfk
-            self.ent_x.delete(0, tk.END); self.ent_x.insert(0, f"{xfk:.1f}")
-            self.ent_y.delete(0, tk.END); self.ent_y.insert(0, f"{yfk:.1f}")
-            self.ent_z.delete(0, tk.END); self.ent_z.insert(0, f"{zfk:.1f}")
+            self.update_cartesian_entries(xfk, yfk, zfk)
         except Exception:
             pass
         self.send_angles_command(float(deg), float(deg), float(deg))
@@ -2267,9 +2353,16 @@ class Robot3GDLGatoVisionController(tk.Tk):
             cv.create_rectangle(12, 52, 430, 72, fill="#0c4a6e", outline=COLOR_CYAN_ACCENT, width=1)
             cv.create_text(16, 62, text=f"Secuencia en curso: Mostrando Casilla {c_curr} de 9 (Posición adaptada a límites)",
                            fill="#ffffff", font=("Segoe UI", 7, "bold"), anchor=tk.W)
+        if getattr(self, 'coord_mode_relative', True):
+            rx = p3[0] - self.HOME_X
+            ry = p3[1] - self.HOME_Y
+            rz = p3[2] - self.HOME_Z
+            hud_coord_txt = f"Efector [Rel 0,0,0]: X={rx:+.1f} cm | Y={ry:+.1f} cm | Z={rz:+.1f} cm (Mesa Z=-39.1)  •  q1={q1_deg:+.1f}° q2={q2_deg:+.1f}° q3={q3_deg:+.1f}°"
+        else:
+            hud_coord_txt = f"Efector [Abs Base]: X={p3[0]:.1f} cm | Y={p3[1]:.1f} cm | Z={p3[2]:.1f} cm  •  q1={q1_deg:+.1f}° q2={q2_deg:+.1f}° q3={q3_deg:+.1f}°"
         cv.create_text(
             12, h - 14,
-            text=f"Efector: X={p3[0]:.1f} cm | Y={p3[1]:.1f} cm | Z={p3[2]:.1f} cm  •  Base q1={q1_deg:+.1f}°  •  Hombro q2={q2_deg:+.1f}°  •  Codo q3={q3_deg:+.1f}°",
+            text=hud_coord_txt,
             fill="#0f172a", font=("Consolas", 8, "bold"), anchor=tk.W
         )
 
@@ -2576,12 +2669,31 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
         tk.Label(p_center, text="Control Cartesiano (Cinemática Inversa MK2)", bg=COLOR_BG_PANEL, fg=COLOR_AMBER_WARNING, font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
 
-        # Caja de entrada de coordenadas cartesianas (X, Y, Z)
+        # Caja de entrada de coordenadas cartesianas (X, Y, Z) y Control de Movimiento
         ik_input_box = tk.Frame(p_center, bg=COLOR_BG_CARD, padx=10, pady=8, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
         ik_input_box.pack(fill=tk.X, pady=6)
 
+        # Fila 1: Selector de Modo de Coordenadas (Relativo Cero Home / Absoluto Base)
+        r_mode = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
+        r_mode.pack(fill=tk.X, pady=(0, 4))
+        self.var_coord_mode = tk.StringVar(value="rel")
+        tk.Label(r_mode, text="Sistema:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        rb_rel = tk.Radiobutton(
+            r_mode, text="Relativo Cero Home (0,0,0)", variable=self.var_coord_mode, value="rel",
+            bg=COLOR_BG_CARD, fg="#0f172a", selectcolor="#e2e8f0", activebackground=COLOR_BG_CARD,
+            font=("Segoe UI", 8, "bold"), command=lambda: self.set_coord_mode(True)
+        )
+        rb_rel.pack(side=tk.LEFT, padx=(0, 8))
+        rb_abs = tk.Radiobutton(
+            r_mode, text="Absoluto Base (Mesa Z=-29.1)", variable=self.var_coord_mode, value="abs",
+            bg=COLOR_BG_CARD, fg="#64748b", selectcolor="#e2e8f0", activebackground=COLOR_BG_CARD,
+            font=("Segoe UI", 8), command=lambda: self.set_coord_mode(False)
+        )
+        rb_abs.pack(side=tk.LEFT)
+
+        # Fila 2: Inputs numéricos X, Y, Z y botón de cálculo IK
         r_inputs = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
-        r_inputs.pack(fill=tk.X)
+        r_inputs.pack(fill=tk.X, pady=(2, 4))
 
         tk.Label(r_inputs, text="X (cm):", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 2))
         self.ent_x = tk.Entry(r_inputs, width=6, bg="#ffffff", fg="#0f172a", font=("Consolas", 10, "bold"), bd=1, relief=tk.SOLID, insertbackground="#0f172a")
@@ -2604,12 +2716,39 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         btn_ik_go.pack(side=tk.RIGHT)
 
-        # Fila de Diagnóstico IK / Error Posicional
+        # Fila 3: Botones de Paso Rápido Jog (Subir / Bajar / Movimiento Cartesiano)
+        r_jog = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
+        r_jog.pack(fill=tk.X, pady=(4, 2))
+
+        tk.Label(r_jog, text="Paso Z:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        btn_z_up5 = tk.Button(r_jog, text="▲ +5cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=5.0))
+        btn_z_up5.pack(side=tk.LEFT, padx=1)
+        btn_z_up1 = tk.Button(r_jog, text="▲ +1cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=1.0))
+        btn_z_up1.pack(side=tk.LEFT, padx=1)
+        btn_z_dn1 = tk.Button(r_jog, text="▼ -1cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-1.0))
+        btn_z_dn1.pack(side=tk.LEFT, padx=1)
+        btn_z_dn5 = tk.Button(r_jog, text="▼ -5cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-5.0))
+        btn_z_dn5.pack(side=tk.LEFT, padx=(1, 8))
+
+        tk.Label(r_jog, text="X/Y:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        btn_x_back = tk.Button(r_jog, text="X -2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-2.0))
+        btn_x_back.pack(side=tk.LEFT, padx=1)
+        btn_x_fwd = tk.Button(r_jog, text="X +2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=2.0))
+        btn_x_fwd.pack(side=tk.LEFT, padx=1)
+        btn_y_l = tk.Button(r_jog, text="Y -2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dy=-2.0))
+        btn_y_l.pack(side=tk.LEFT, padx=1)
+        btn_y_r = tk.Button(r_jog, text="Y +2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dy=2.0))
+        btn_y_r.pack(side=tk.LEFT, padx=(1, 4))
+
+        btn_zero_fast = tk.Button(r_jog, text="⟲ Cero (0,0,0)", bg="#15803d", fg="#ffffff", activebackground="#166534", font=("Segoe UI", 7, "bold"), padx=6, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=self.cmd_home)
+        btn_zero_fast.pack(side=tk.RIGHT)
+
+        # Fila 4: Diagnóstico IK / Error Posicional
         r_diag = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
         r_diag.pack(fill=tk.X, pady=(6, 0))
 
         self.lbl_ik_status = tk.Label(
-            r_diag, text="Estado IK: Listo | Error Posicional: 0.0000 cm",
+            r_diag, text="Estado IK: Listo | Cero Home (0, 0, 0) calibrado sobre caja",
             bg=COLOR_BG_CARD, fg=COLOR_GREEN_SUCCESS, font=("Consolas", 8)
         )
         self.lbl_ik_status.pack(side=tk.LEFT)
