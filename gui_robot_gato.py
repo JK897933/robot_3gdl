@@ -193,6 +193,10 @@ class RobotMK2Kinematics:
           (colliding: bool, warning: bool, message: str)
         """
         m3_min = self.limits[2][0]
+        # Si el límite fue recortado artificialmente a > -60° (ej. -30°),
+        # usar el límite mecánico real de seguridad (-115°) para permitir el movimiento
+        if m3_min >= -60.0:
+            m3_min = -115.0
         if q3_deg < m3_min:
             return True, True, f"Colisión inminente: Tuerca M2-M3 golpea el brazo ({q3_deg:.1f}° < {m3_min:.1f}°)"
         elif q3_deg < (m3_min + self.nut_collision_margin_deg):
@@ -357,24 +361,36 @@ class RobotMK2Kinematics:
         q2_deg = math.degrees(q2_rad)
 
         # --- PASO 6: Validación de rangos mecánicos y Anticolisión M2-M3 ---
+        # Si los límites de M2 (Hombro) están invertidos (ej. negativos <= 0),
+        # normalizar automáticamente al semiespacio de trabajo real [0.0, 95.0]
+        lim_m2 = list(self.limits[1])
+        if lim_m2[1] <= 0.0:
+            lim_m2 = [0.0, max(95.0, abs(lim_m2[0]))]
+
+        # Si los límites de M3 (Codo) están recortados (ej. Min >= -35°),
+        # expandir para permitir alcanzar el plano del tablero [-115.0, 5.0]
+        lim_m3 = list(self.limits[2])
+        if lim_m3[0] >= -35.0:
+            lim_m3 = [-115.0, max(5.0, lim_m3[1])]
+
         if not (self.limits[0][0] <= q1_deg <= self.limits[0][1]):
             return (q1_deg, q2_deg, q3_deg), False, (
                 f"J1 (Base)={q1_deg:.1f}° fuera de rango [{self.limits[0][0]}°, {self.limits[0][1]}°]"
             )
-        if not (self.limits[1][0] <= q2_deg <= self.limits[1][1]):
+        if not (lim_m2[0] <= q2_deg <= lim_m2[1]):
             return (q1_deg, q2_deg, q3_deg), False, (
-                f"J2 (Hombro)={q2_deg:.1f}° fuera de rango [{self.limits[1][0]}°, {self.limits[1][1]}°]"
+                f"J2 (Hombro)={q2_deg:.1f}° fuera de rango [{lim_m2[0]:.1f}°, {lim_m2[1]:.1f}°]"
             )
         
         # Validación de flexión del codo y protección específica contra la tuerca
         is_collision, is_warn, col_msg = self.check_m2_m3_collision(q2_deg, q3_deg)
         if is_collision:
             return (q1_deg, q2_deg, q3_deg), False, (
-                f" COLISIÓN EVITADA: La tuerca M2-M3 chocaría con el brazo (q3={q3_deg:.1f}° < límite seguro {self.limits[2][0]:.1f}°)"
+                f"COLISIÓN EVITADA: La tuerca M2-M3 chocaría con el brazo (q3={q3_deg:.1f}° < límite seguro {lim_m3[0]:.1f}°)"
             )
-        if not (self.limits[2][0] <= q3_deg <= self.limits[2][1]):
+        if not (lim_m3[0] <= q3_deg <= lim_m3[1]):
             return (q1_deg, q2_deg, q3_deg), False, (
-                f"J3 (Codo)={q3_deg:.1f}° fuera de rango [{self.limits[2][0]}°, {self.limits[2][1]}°]"
+                f"J3 (Codo)={q3_deg:.1f}° fuera de rango [{lim_m3[0]:.1f}°, {lim_m3[1]:.1f}°]"
             )
 
         return (q1_deg, q2_deg, q3_deg), True, "OK"
@@ -1179,8 +1195,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         if not reachable:
             def _warn():
                 try:
-                    self.lbl_ik_status.config(text=f"Estado IK: [ERROR] {msg}", fg=COLOR_RED_DANGER)
-                    messagebox.showwarning("Fuera de Workspace", msg)
+                    self.lbl_ik_status.config(text=f"Estado IK: [NO ALCANZABLE] {msg}", fg=COLOR_RED_DANGER)
                 except Exception:
                     pass
             self.dispatch_ui(_warn)
@@ -1267,8 +1282,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             target_z = 8.0
             angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, target_z, elbow_up=True)
             if not reachable:
-                self.lbl_ik_status.config(text=f"Estado IK: [ERROR] {msg}", fg=COLOR_RED_DANGER)
-                messagebox.showwarning("Anticolisión Casilla", f"Casilla {cell_idx+1} [Hover]:\n\n{msg}\n\nReposicione el tablero a mayor distancia para que la tuerca M2-M3 no colisione.")
+                self.lbl_ik_status.config(text=f"Casilla {cell_idx+1} [Hover]: {msg}", fg=COLOR_RED_DANGER)
                 return
             if hasattr(self, 'lbl_cell_angles_info'):
                 self.lbl_cell_angles_info.config(
@@ -1302,8 +1316,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, cz, elbow_up=True)
 
             if not reachable:
-                self.lbl_ik_status.config(text=f"Estado IK: [ERROR] {msg}", fg=COLOR_RED_DANGER)
-                messagebox.showwarning("Anticolisión Casilla", f"Casilla {cell_idx+1} [Tablero]:\n\n{msg}\n\nReposicione el tablero a mayor distancia para que la tuerca M2-M3 no colisione.")
+                self.lbl_ik_status.config(text=f"Casilla {cell_idx+1} [Tablero]: {msg}", fg=COLOR_RED_DANGER)
                 return
             if hasattr(self, 'lbl_cell_angles_info'):
                 info_txt = f"Casilla {cell_idx+1} [TABLERO 1:1]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°" if taught_angles else f"Casilla {cell_idx+1} [TABLERO Z={cz:.1f}cm]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°"
@@ -1567,10 +1580,16 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 lmin = min(v1, v2)
                 lmax = max(v1, v2)
 
+                # Si en M2 (Hombro) se ingresó negativo (ej. -95 a 0) cuando el hombro opera en semiespacio positivo
+                if i == 1 and lmax <= 0.0:
+                    lmin, lmax = 0.0, max(abs(v1), abs(v2))
+
                 # Si en M3 se ingresó positivo por omisión de signo menos
                 if i == 2 and lmin > 0 and lmax <= 10.0:
                     lmin = -lmin
                     lmin, lmax = min(lmin, lmax), max(lmin, lmax)
+                elif i == 2 and lmin >= -35.0:
+                    lmin = -115.0
 
                 # Sincronizar las cajas de texto en pantalla con el orden correcto
                 self.ent_lim_min[i].delete(0, tk.END)

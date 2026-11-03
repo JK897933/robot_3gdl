@@ -1,5 +1,5 @@
 {
-    "current_profile": "Prueba 3",
+    "current_profile": "Mi Robot Gato MK2",
     "profiles": {
         "Robot MK2 Gato 31:1 (Predeterminado)": {
             "name": "Robot MK2 Gato 31:1 (Predeterminado)",
@@ -102,15 +102,15 @@
             },
             "limits": {
                 "m1": [
-                    -30.0,
-                    30.0
+                    -60.0,
+                    60.0
                 ],
                 "m2": [
                     0.0,
-                    60.0
+                    95.0
                 ],
                 "m3": [
-                    -60.0,
+                    -115.0,
                     5.0
                 ]
             },
