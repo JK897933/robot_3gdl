@@ -63,7 +63,7 @@ class KinematicsEngine:
         self.a1 = float(a1)  # Offset horizontal hombro (cm)
         self.a2 = float(a2)  # Longitud brazo principal (cm)
         self.a3 = float(a3)  # Longitud antebrazo (cm)
-        self.limits = [(-60.0, 60.0), (-60.0, 60.0), (-115.0, 5.0)]
+        self.limits = [(-60.0, 60.0), (-60.0, 45.0), (-115.0, 0.0)]
 
     def forward_kinematics(self, q1_deg, q2_deg, q3_deg):
         """Calcula (X, Y, Z) en cm dado (q1, q2, q3) en grados."""

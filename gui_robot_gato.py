@@ -179,19 +179,24 @@ class RobotMK2Kinematics:
         # que la tuerca/tornillo de la articulación colisione físicamente contra M2 (Brazo).
         self.limits = [
             (-60.0, 60.0),   # J1 (Base - Yaw): Giro seguro [-60°, +60°]
-            (-60.0, 45.0),   # J2 (Hombro - Pitch): Inclinación hacia mesa [-60°, +45°]
-            (-90.0, 45.0)    # J3 (Codo - Pitch): Flexión hacia mesa [-90°, +45°]
+            (-60.0, 45.0),   # J2 (Hombro - Pitch): Inclinación hacia mesa [-60°, +45°] (cuidado hacia atrás)
+            (-90.0, 0.0)     # J3 (Codo - Pitch): Exclusivamente Home (0°) y Adelante/Abajo [-90°, 0°] (NUNCA hacia atrás)
         ]
         self.nut_collision_margin_deg = 5.0  # Margen de alerta temprana de colisión
 
     def check_m2_m3_collision(self, q2_deg, q3_deg):
         """
         Verifica en tiempo real si la flexión relativa entre el Brazo (M2) y el Codo (M3)
-        provoca una colisión física entre la tuerca/tornillo de la articulación y el eslabón M2.
+        provoca una colisión física entre la tuerca/tornillo de la articulación y el eslabón M2,
+        o si M3 intenta moverse hacia atrás (q3 > 0.0°).
         
         Retorna:
           (colliding: bool, warning: bool, message: str)
         """
+        # REGLA ESTRICTA: M3 nunca puede moverse hacia atrás
+        if q3_deg > 0.001:
+            return True, True, f"M3 bloqueado: No se permite mover hacia atrás ({q3_deg:+.1f}° > 0.0°). Solo Home (0°) y adelante."
+
         m3_min = self.limits[2][0]
         # Si el límite fue recortado artificialmente a > -60° (ej. -30°),
         # usar el límite mecánico real de seguridad (-115°) para permitir el movimiento
@@ -375,10 +380,11 @@ class RobotMK2Kinematics:
         q2_deg = math.degrees(q2_rad)
 
         # --- PASO 6: Validación de rangos mecánicos y Anticolisión M2-M3 ---
-        # Asegurar límites operacionales bidireccionales para permitir tanto subir (+Z) como bajar (-Z hacia mesa)
+        # M3 tiene estrictamente prohibido moverse hacia atrás (max = 0.0° / Home)
+        # M1 y M2 sí pueden moverse con cuidado hacia atrás (M2 max = 45.0°)
         lim_m1 = list(self.limits[0])
         lim_m2 = [min(-60.0, float(self.limits[1][0])), max(45.0, float(self.limits[1][1]))]
-        lim_m3 = [min(-115.0, float(self.limits[2][0])), max(45.0, float(self.limits[2][1]))]
+        lim_m3 = [min(-115.0, float(self.limits[2][0])), 0.0]
 
         if not (lim_m1[0] <= q1_deg <= lim_m1[1]):
             return (q1_deg, q2_deg, q3_deg), False, (
@@ -388,12 +394,16 @@ class RobotMK2Kinematics:
             return (q1_deg, q2_deg, q3_deg), False, (
                 f"J2 (Hombro)={q2_deg:.1f}° fuera de rango [{lim_m2[0]:.1f}°, {lim_m2[1]:.1f}°]"
             )
+        if q3_deg > 0.001:
+            return (q1_deg, q2_deg, q3_deg), False, (
+                f"M3 (Codo)={q3_deg:.1f}° bloqueado: M3 solo puede moverse hacia adelante y Home (<= 0.0°)"
+            )
         
         # Validación de flexión del codo y protección específica contra la tuerca
         is_collision, is_warn, col_msg = self.check_m2_m3_collision(q2_deg, q3_deg)
         if is_collision:
             return (q1_deg, q2_deg, q3_deg), False, (
-                f"COLISIÓN EVITADA: La tuerca M2-M3 chocaría con el brazo (q3={q3_deg:.1f}° < límite seguro {lim_m3[0]:.1f}°)"
+                f"COLISIÓN EVITADA: {col_msg}"
             )
         if not (lim_m3[0] <= q3_deg <= lim_m3[1]):
             return (q1_deg, q2_deg, q3_deg), False, (
@@ -597,6 +607,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
         if getattr(self, 'motors_free_state', False):
             # En modo MOTORES LIBRES, NUNCA transmitir consignas que reactiven torque o causen tics
             return
+        # REGLA ESTRICTA DE OPERACIÓN:
+        # M3 nunca puede moverse hacia atrás (q3 > 0.0°). Solo Home (0.0°) y adelante (q3 <= 0.0°).
+        if q3 > 0.0:
+            q3 = 0.0
         self.pkt_seq = (self.pkt_seq + 1) % 10000
         payload = f"PKT,{self.pkt_seq},0,ANGLES,{q1:.2f},{q2:.2f},{q3:.2f}"
         cs = self.calculate_checksum(payload)
@@ -827,7 +841,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                                     lmax_val = max(lmax_val, 45.0)
                                                 elif m_idx == 2:
                                                     lmin_val = min(lmin_val, -90.0)
-                                                    lmax_val = max(lmax_val, 45.0)
+                                                    lmax_val = 0.0  # M3 estrictamente Home y adelante (nunca hacia atrás)
                                                 self.kin.limits[m_idx] = (lmin_val, lmax_val)
                                                 self.gauge_ranges[m_idx] = (lmin_val, lmax_val)
                                                 if m_idx < len(self.sliders_ax):
@@ -1669,16 +1683,17 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 lmin = min(v1, v2)
                 lmax = max(v1, v2)
 
-                # Si en M2 (Hombro) se ingresó negativo (ej. -95 a 0) cuando el hombro opera en semiespacio positivo
-                if i == 1 and lmax <= 0.0:
-                    lmin, lmax = 0.0, max(abs(v1), abs(v2))
+                # M2 (Hombro): Se permite mover adelante (-60°) y atrás (+45° con cuidado)
+                if i == 1:
+                    lmin = min(-60.0, lmin)
+                    lmax = min(45.0, max(lmax, 0.0))
 
-                # Si en M3 se ingresó positivo por omisión de signo menos
-                if i == 2 and lmin > 0 and lmax <= 10.0:
-                    lmin = -lmin
-                    lmin, lmax = min(lmin, lmax), max(lmin, lmax)
-                elif i == 2 and lmin >= -35.0:
-                    lmin = -115.0
+                # M3 (Codo): NUNCA hacia atrás (lmax <= 0.0 estricto). Solo Home (0.0°) y adelante.
+                if i == 2:
+                    if lmax > 0.0:
+                        lmax = 0.0
+                    if lmin >= -35.0:
+                        lmin = -90.0
 
                 # Sincronizar las cajas de texto en pantalla con el orden correcto
                 self.ent_lim_min[i].delete(0, tk.END)
@@ -1836,6 +1851,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
             lmin = min(self.kin.limits[ax])
             lmax = max(self.kin.limits[ax])
             deg = max(lmin, min(lmax, deg))
+            # M3 nunca puede moverse hacia atrás (deg > 0.0°)
+            if ax == 2 and deg > 0.0:
+                deg = 0.0
 
             # ️ PROTECCIÓN ANTICOLISIÓN EN TIEMPO REAL: Tuerca articular M2-M3
             if ax == 2:
@@ -1890,6 +1908,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
             # Protección estricta contra sobre-carrera y colisión de tuerca
             lim_min, lim_max = self.kin.limits[ax]
             val = max(lim_min, min(lim_max, val))
+            if ax == 2 and val > 0.0:
+                val = 0.0  # M3 nunca hacia atrás
             self.target_angles[ax] = val
             if hasattr(self, 'sliders_ax') and ax < len(self.sliders_ax):
                 self.sliders_ax[ax].set(val)
@@ -1902,9 +1922,12 @@ class Robot3GDLGatoVisionController(tk.Tk):
     def cmd_all_presets(self, deg):
         """Envía el mismo ángulo de reductor a los 3 motores simultáneamente (0°, 180°, 360°)."""
         for ax in range(3):
-            self.target_angles[ax] = float(deg)
+            val = float(deg)
+            if ax == 2 and val > 0.0:
+                val = 0.0  # M3 nunca hacia atrás
+            self.target_angles[ax] = val
             if hasattr(self, 'sliders_ax') and ax < len(self.sliders_ax):
-                self.sliders_ax[ax].set(float(deg))
+                self.sliders_ax[ax].set(val)
         try:
             xfk, yfk, zfk = self.kin.forward_kinematics(*self.target_angles)
             self.update_cartesian_entries(xfk, yfk, zfk)
@@ -3280,11 +3303,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
         raw_m2 = lims.get("m2", [-60.0, 60.0])
         l_m2 = (min(float(raw_m2[0]), float(raw_m2[1])), max(float(raw_m2[0]), float(raw_m2[1])))
 
-        raw_m3 = lims.get("m3", [-115.0, 5.0])
+        raw_m3 = lims.get("m3", [-90.0, 0.0])
         v1_3, v2_3 = float(raw_m3[0]), float(raw_m3[1])
-        if v1_3 > 0 and v2_3 <= 10.0:
-            v1_3 = -v1_3
-        l_m3 = (min(v1_3, v2_3), max(v1_3, v2_3))
+        # REGLA ESTRICTA DE OPERACIÓN: M3 nunca hacia atrás (max <= 0.0°). Solo Home (0°) y adelante.
+        l_m3 = (min(v1_3, v2_3), min(0.0, max(v1_3, v2_3)))
         self.kin.limits = [l_m1, l_m2, l_m3]
         self.gauge_ranges = [l_m1, l_m2, l_m3]
 
