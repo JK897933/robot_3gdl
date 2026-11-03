@@ -3,7 +3,7 @@
     "profiles": {
         "Robot MK2 Gato 31:1 (Predeterminado)": {
             "name": "Robot MK2 Gato 31:1 (Predeterminado)",
-            "description": "Configuración estándar SolidWorks con reductores cicloidales 31:1 y electroimán en GPIO 7",
+            "description": "Configuraci\u00f3n est\u00e1ndar SolidWorks con reductores cicloidales 31:1 y electroim\u00e1n en GPIO 7",
             "date": "2026-10-30",
             "geometry": {
                 "d1": 10.0,
@@ -23,18 +23,18 @@
                 ],
                 "m2": [
                     -60.0,
-                    45.0
+                    60.0
                 ],
                 "m3": [
-                    -90.0,
-                    0.0
+                    0.0,
+                    45.0
                 ]
             },
             "tool": {
-                "type": "Electroimán 12V (GPIO 7)",
-                "pick_z": -26.0,
+                "type": "Electroiman 12V (GPIO 7)",
+                "pick_z": -29.1,
                 "place_z": -29.1,
-                "hover_z": -23.1
+                "hover_z": -25.0
             },
             "dynamics": {
                 "speed_mode": "Normal (2400 Hz)",
@@ -45,7 +45,7 @@
         },
         "Robot Prototipo Compacto (Laboratorio)": {
             "name": "Robot Prototipo Compacto (Laboratorio)",
-            "description": "Perfil de prueba con eslabones cortos y velocidad reducida para máxima seguridad",
+            "description": "Perfil de prueba con eslabones cortos y velocidad reducida para m\u00e1xima seguridad",
             "date": "2026-10-30",
             "geometry": {
                 "d1": 8.0,
@@ -60,30 +60,30 @@
             },
             "limits": {
                 "m1": [
-                    -45.0,
-                    45.0
+                    -60.0,
+                    60.0
                 ],
                 "m2": [
                     -60.0,
-                    45.0
+                    60.0
                 ],
                 "m3": [
-                    -115.0,
-                    0.0
+                    0.0,
+                    45.0
                 ]
             },
             "tool": {
-                "type": "Electroimán 12V (GPIO 7)",
-                "pick_z": 5.0,
-                "place_z": 2.5,
-                "hover_z": 7.0
+                "type": "Electroiman 12V (GPIO 7)",
+                "pick_z": -29.1,
+                "place_z": -29.1,
+                "hover_z": -25.0
             },
             "dynamics": {
                 "speed_mode": "Seguro (1200 Hz)",
                 "max_speed_hz": 1200,
                 "accel_hz_s": 1500
             },
-            "zero_calibrated": false
+            "zero_calibrated": true
         },
         "Mi Robot Gato MK2": {
             "name": "Mi Robot Gato MK2",
@@ -107,18 +107,18 @@
                 ],
                 "m2": [
                     -60.0,
-                    45.0
+                    60.0
                 ],
                 "m3": [
-                    -115.0,
-                    0.0
+                    0.0,
+                    45.0
                 ]
             },
             "tool": {
                 "type": "Electroiman 12V (GPIO 7)",
-                "pick_z": -26.0,
+                "pick_z": -29.1,
                 "place_z": -29.1,
-                "hover_z": -23.1
+                "hover_z": -25.0
             },
             "dynamics": {
                 "speed_mode": "Normal / Fluido (2400 Hz)",
@@ -148,19 +148,19 @@
                     60.0
                 ],
                 "m2": [
-                    -95.0,
-                    20.0
+                    -60.0,
+                    60.0
                 ],
                 "m3": [
-                    -115.0,
-                    0.0
+                    0.0,
+                    45.0
                 ]
             },
             "tool": {
-                "type": "Electroimán 12V (GPIO 7)",
-                "pick_z": 6.0,
-                "place_z": 3.0,
-                "hover_z": 8.0
+                "type": "Electroiman 12V (GPIO 7)",
+                "pick_z": -29.1,
+                "place_z": -29.1,
+                "hover_z": -25.0
             },
             "dynamics": {
                 "speed_mode": "Normal / Fluido (2400 Hz)",
@@ -191,18 +191,18 @@
                 ],
                 "m2": [
                     -60.0,
-                    45.0
+                    60.0
                 ],
                 "m3": [
-                    -80.0,
-                    0.0
+                    0.0,
+                    45.0
                 ]
             },
             "tool": {
-                "type": "Electroimán 12V (GPIO 7)",
-                "pick_z": 6.0,
-                "place_z": 3.0,
-                "hover_z": 8.0
+                "type": "Electroiman 12V (GPIO 7)",
+                "pick_z": -29.1,
+                "place_z": -29.1,
+                "hover_z": -25.0
             },
             "dynamics": {
                 "speed_mode": "Normal / Fluido (2400 Hz)",
@@ -233,18 +233,18 @@
                 ],
                 "m2": [
                     -60.0,
-                    45.0
+                    60.0
                 ],
                 "m3": [
-                    -115.0,
-                    0.0
+                    0.0,
+                    45.0
                 ]
             },
             "tool": {
-                "type": "Electroimán 12V (GPIO 7)",
-                "pick_z": 6.0,
-                "place_z": 3.0,
-                "hover_z": 8.0
+                "type": "Electroiman 12V (GPIO 7)",
+                "pick_z": -29.1,
+                "place_z": -29.1,
+                "hover_z": -25.0
             },
             "dynamics": {
                 "speed_mode": "Normal / Fluido (2400 Hz)",

@@ -207,12 +207,12 @@ static float g_min_speed_hz = 35.0f;
 static float g_accel_hz_per_sec = 2600.0f;
 
 // Límites angulares de seguridad configurables (salida del reductor en grados)
-// Evitan que el robot colisione contra sí mismo o dañe su estructura mecánica
-// NOTA: M3 Codo está acotado por defecto a -115.0f para impedir que la tuerca mecánica
-// de la articulación golpee físicamente la estructura del eslabón M2 (Brazo).
-static float g_limit_min_deg[NUM_MOTORS] = {
-    -60.0f, -95.0f, -115.0f}; // J1 Base, J2 Hombro, J3 Codo (Protección tuerca M2-M3)
-static float g_limit_max_deg[NUM_MOTORS] = {60.0f, 95.0f, 5.0f};
+// Límites estrictos del robot:
+// M1: [-60.0°, +60.0°]
+// M2: [-60.0°, +60.0°]
+// M3: [  0.0°, +45.0°] (ni más ni menos)
+static float g_limit_min_deg[NUM_MOTORS] = {-60.0f, -60.0f, 0.0f};
+static float g_limit_max_deg[NUM_MOTORS] = {60.0f, 60.0f, 45.0f};
 
 // Telemetría y Estado Compartido
 static as5600_reading_t g_last_reading[NUM_MOTORS] = {0};
@@ -223,37 +223,35 @@ static float g_current_error[NUM_MOTORS] = {0.0f, 0.0f, 0.0f};
 static bool g_gripper_active = false;
 static SemaphoreHandle_t g_data_mutex = NULL;
 
-// Posiciones calculadas para el Tablero de 3x3 del Gato (J1, J2, J3) en Z=3.0 cm
-// Optimizadas en la zona de alcance segura (X=48 cm) donde q3 >= -119.4°,
-// garantizando CERO COLISIÓN entre la tuerca articular M2-M3 y el brazo.
+// Posiciones calculadas para el Tablero de 3x3 del Gato (J1, J2, J3) en Z=-29.1 cm (mesa)
+// Adaptadas estrictamente a M1 [-60, 60], M2 [-60, 60], M3 [0, 45]:
 static robot_pose_t g_cell_poses[NUM_CELLS] = {
-    {4.47f, 35.70f, -88.44f},   // Casilla 1 (Fila 1, Col 1 - Lejana Izq)
-    {0.00f, 35.88f, -88.87f},   // Casilla 2 (Fila 1, Col 2 - Lejana Centro)
-    {-4.47f, 35.70f, -88.44f},  // Casilla 3 (Fila 1, Col 3 - Lejana Der)
-    {4.85f, 40.09f, -99.01f},   // Casilla 4 (Fila 2, Col 1 - Centro Izq)
-    {0.00f, 40.27f, -99.44f},   // Casilla 5 (Fila 2, Col 2 - Centro Tablero)
-    {-4.85f, 40.09f, -99.01f},  // Casilla 6 (Fila 2, Col 3 - Centro Der)
-    {5.30f, 43.88f, -108.77f},  // Casilla 7 (Fila 3, Col 1 - Cercana Izq)
-    {0.00f, 44.04f, -109.20f},  // Casilla 8 (Fila 3, Col 2 - Cercana Centro)
-    {-5.30f, 43.88f, -108.77f}  // Casilla 9 (Fila 3, Col 3 - Cercana Der)
+    {3.42f, -34.87f, 0.00f},   // Casilla 1 (Fila 1, Col 1)
+    {0.00f, -34.92f, 0.00f},   // Casilla 2 (Fila 1, Col 2)
+    {-3.42f, -34.87f, 0.00f},  // Casilla 3 (Fila 1, Col 3)
+    {3.63f, -45.20f, 16.66f},  // Casilla 4 (Fila 2, Col 1)
+    {0.00f, -45.86f, 17.83f},  // Casilla 5 (Fila 2, Col 2 - Centro Tablero)
+    {-3.63f, -45.20f, 16.66f}, // Casilla 6 (Fila 2, Col 3)
+    {3.88f, -58.76f, 39.33f},  // Casilla 7 (Fila 3, Col 1)
+    {0.00f, -59.11f, 39.87f},  // Casilla 8 (Fila 3, Col 2)
+    {-3.88f, -58.76f, 39.33f}  // Casilla 9 (Fila 3, Col 3)
 };
 
-// Posiciones de Aproximación Elevada (Hover) en Z=8.0 cm (5 cm arriba del tablero)
+// Posiciones de Aproximación Elevada (Hover) en Z=-25.0 cm
 static robot_pose_t g_cell_hover_poses[NUM_CELLS] = {
-    {4.47f, 42.37f, -89.63f},   // Casilla 1 Hover
-    {0.00f, 42.58f, -90.06f},   // Casilla 2 Hover
-    {-4.47f, 42.37f, -89.63f},  // Casilla 3 Hover
-    {4.85f, 47.40f, -100.21f},  // Casilla 4 Hover
-    {0.00f, 47.61f, -100.64f},  // Casilla 5 Hover
-    {-4.85f, 47.40f, -100.21f}, // Casilla 6 Hover
-    {5.30f, 51.99f, -110.03f},  // Casilla 7 Hover
-    {0.00f, 52.20f, -110.47f},  // Casilla 8 Hover
-    {-5.30f, 51.99f, -110.03f}  // Casilla 9 Hover
+    {3.42f, -31.10f, 0.00f},   // Casilla 1 Hover
+    {0.00f, -31.15f, 0.00f},   // Casilla 2 Hover
+    {-3.42f, -31.10f, 0.00f},  // Casilla 3 Hover
+    {3.63f, -44.70f, 23.70f},  // Casilla 4 Hover
+    {0.00f, -44.80f, 23.70f},  // Casilla 5 Hover
+    {-3.63f, -44.70f, 23.70f}, // Casilla 6 Hover
+    {3.88f, -56.70f, 43.60f},  // Casilla 7 Hover
+    {0.00f, -56.80f, 43.60f},  // Casilla 8 Hover
+    {-3.88f, -56.70f, 43.60f}  // Casilla 9 Hover
 };
 
 static robot_pose_t g_home_pose = {0.0f, 0.0f, 0.0f};
-static robot_pose_t g_pick_pose = {-24.23f, 52.90f,
-                                   -119.50f}; // Dispensador de Fichas (Seguro sin colisión)
+static robot_pose_t g_pick_pose = {-14.47f, -36.40f, 0.00f}; // Dispensador de Fichas
 
 // Mapeo de pines para los 3 buses I2C dedicados
 typedef struct {
@@ -759,10 +757,16 @@ static void nvs_load_settings(void) {
       if (nvs_get_i32(handle, key_max, &raw_lmax) == ESP_OK) {
         g_limit_max_deg[m] = (float)raw_lmax / 100.0f;
       }
-      // Sanitización anticolisión: Si NVS contiene un valor antiguo peligroso para M3
-      if (m == 2 && g_limit_min_deg[2] < -120.0f) {
-        g_limit_min_deg[2] = -115.0f;
-        ESP_LOGW(TAG, "Límite NVS M3 superaba zona de choque de tuerca. Reajustado a -115.0 deg");
+      // Sanitización de límites estrictos: M1 [-60, 60], M2 [-60, 60], M3 [0, 45]
+      if (m == 0) {
+        if (g_limit_min_deg[0] < -60.0f) g_limit_min_deg[0] = -60.0f;
+        if (g_limit_max_deg[0] > 60.0f)  g_limit_max_deg[0] = 60.0f;
+      } else if (m == 1) {
+        if (g_limit_min_deg[1] < -60.0f) g_limit_min_deg[1] = -60.0f;
+        if (g_limit_max_deg[1] > 60.0f)  g_limit_max_deg[1] = 60.0f;
+      } else if (m == 2) {
+        if (g_limit_min_deg[2] < 0.0f)   g_limit_min_deg[2] = 0.0f;
+        if (g_limit_max_deg[2] > 45.0f)  g_limit_max_deg[2] = 45.0f;
       }
       ESP_LOGI(TAG, "Motor %d Límites de Seguridad NVS: [%.1f, %.1f] deg",
                m + 1, g_limit_min_deg[m], g_limit_max_deg[m]);

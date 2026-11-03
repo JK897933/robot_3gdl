@@ -174,38 +174,29 @@ class RobotMK2Kinematics:
         self.g = 9.81       # m/s^2: Aceleración de la gravedad terrestre
 
         # Rango admisible de movimiento angular seguro (grados - Reductor 31:1)
-        # Protege al robot contra colisiones mecánicas y roturas
-        # NOTA: J3 (Codo) está acotado por defecto a [-115.0°, +5.0°] para evitar
-        # que la tuerca/tornillo de la articulación colisione físicamente contra M2 (Brazo).
+        # Límites estrictos del robot:
+        # M1 (Base):   [-60.0°, +60.0°]
+        # M2 (Hombro): [-60.0°, +60.0°]
+        # M3 (Codo):   [  0.0°, +45.0°]
         self.limits = [
             (-60.0, 60.0),   # J1 (Base - Yaw): Giro seguro [-60°, +60°]
-            (-60.0, 45.0),   # J2 (Hombro - Pitch): Inclinación hacia mesa [-60°, +45°] (cuidado hacia atrás)
-            (-90.0, 0.0)     # J3 (Codo - Pitch): Exclusivamente Home (0°) y Adelante/Abajo [-90°, 0°] (NUNCA hacia atrás)
+            (-60.0, 60.0),   # J2 (Hombro - Pitch): [-60°, +60°]
+            (0.0, 45.0)      # J3 (Codo - Pitch): [0.0°, 45.0°] (ni más ni menos)
         ]
-        self.nut_collision_margin_deg = 5.0  # Margen de alerta temprana de colisión
+        self.nut_collision_margin_deg = 2.0  # Margen de alerta temprana de colisión
 
     def check_m2_m3_collision(self, q2_deg, q3_deg):
         """
-        Verifica en tiempo real si la flexión relativa entre el Brazo (M2) y el Codo (M3)
-        provoca una colisión física entre la tuerca/tornillo de la articulación y el eslabón M2,
-        o si M3 intenta moverse hacia atrás (q3 > 0.0°).
+        Verifica en tiempo real los límites seguros de M2 y M3.
+        M3 está estrictamente acotado a [0.0°, 45.0°].
         
         Retorna:
           (colliding: bool, warning: bool, message: str)
         """
-        # REGLA ESTRICTA: M3 nunca puede moverse hacia atrás
-        if q3_deg > 0.001:
-            return True, True, f"M3 bloqueado: No se permite mover hacia atrás ({q3_deg:+.1f}° > 0.0°). Solo Home (0°) y adelante."
-
-        m3_min = self.limits[2][0]
-        # Si el límite fue recortado artificialmente a > -60° (ej. -30°),
-        # usar el límite mecánico real de seguridad (-115°) para permitir el movimiento
-        if m3_min >= -60.0:
-            m3_min = -115.0
-        if q3_deg < m3_min:
-            return True, True, f"Colisión inminente: Tuerca M2-M3 golpea el brazo ({q3_deg:.1f}° < {m3_min:.1f}°)"
-        elif q3_deg < (m3_min + self.nut_collision_margin_deg):
-            return False, True, f"Proximidad crítica: Tuerca M2-M3 a {q3_deg - m3_min:.1f}° del choque ({q3_deg:.1f}°)"
+        if q3_deg < -0.5:
+            return True, True, f"M3 bloqueado: Ángulo menor que el mínimo ({q3_deg:+.1f}° < 0.0°). Rango admisible [0.0°, 45.0°]."
+        if q3_deg > 45.5:
+            return True, True, f"M3 bloqueado: Ángulo mayor que el máximo ({q3_deg:+.1f}° > 45.0°). Rango admisible [0.0°, 45.0°]."
         return False, False, "OK"
 
     # --------------------------------------------------------------------------
@@ -366,9 +357,11 @@ class RobotMK2Kinematics:
         # Acotamiento numérico estricto para evitar indeterminación por precisión float
         cos_q3 = max(-1.0, min(1.0, cos_q3))
 
+        # En la convención física y geométrica del robot (código anterior):
+        # M3 opera en el cuadrante positivo [0.0°, 45.0°]
         sin_q3 = math.sqrt(max(0.0, 1.0 - cos_q3**2))
-        if elbow_up:
-            sin_q3 = -sin_q3  # Solución codo arriba (q3 negativo)
+        if not elbow_up:
+            sin_q3 = -sin_q3
 
         q3_rad = math.atan2(sin_q3, cos_q3)
         q3_deg = math.degrees(q3_rad)
@@ -379,35 +372,33 @@ class RobotMK2Kinematics:
         q2_rad = beta - gamma
         q2_deg = math.degrees(q2_rad)
 
-        # --- PASO 6: Validación de rangos mecánicos y Anticolisión M2-M3 ---
-        # M3 tiene estrictamente prohibido moverse hacia atrás (max = 0.0° / Home)
-        # M1 y M2 sí pueden moverse con cuidado hacia atrás (M2 max = 45.0°)
-        lim_m1 = list(self.limits[0])
-        lim_m2 = [min(-60.0, float(self.limits[1][0])), max(45.0, float(self.limits[1][1]))]
-        lim_m3 = [min(-115.0, float(self.limits[2][0])), 0.0]
+        # --- PASO 6: Validación de rangos mecánicos exactos ---
+        # Límites estrictos configurados por el usuario:
+        # M1 (Base):   [-60.0°, +60.0°]
+        # M2 (Hombro): [-60.0°, +60.0°]
+        # M3 (Codo):   [  0.0°, +45.0°]
+        lim_m1 = [-60.0, 60.0]
+        lim_m2 = [-60.0, 60.0]
+        lim_m3 = [0.0, 45.0]
 
-        if not (lim_m1[0] <= q1_deg <= lim_m1[1]):
+        if not (lim_m1[0] - 0.05 <= q1_deg <= lim_m1[1] + 0.05):
             return (q1_deg, q2_deg, q3_deg), False, (
                 f"J1 (Base)={q1_deg:.1f}° fuera de rango [{lim_m1[0]:.1f}°, {lim_m1[1]:.1f}°]"
             )
-        if not (lim_m2[0] <= q2_deg <= lim_m2[1]):
+        if not (lim_m2[0] - 0.05 <= q2_deg <= lim_m2[1] + 0.05):
             return (q1_deg, q2_deg, q3_deg), False, (
                 f"J2 (Hombro)={q2_deg:.1f}° fuera de rango [{lim_m2[0]:.1f}°, {lim_m2[1]:.1f}°]"
             )
-        if q3_deg > 0.001:
+        if not (lim_m3[0] - 0.05 <= q3_deg <= lim_m3[1] + 0.05):
             return (q1_deg, q2_deg, q3_deg), False, (
-                f"M3 (Codo)={q3_deg:.1f}° bloqueado: M3 solo puede moverse hacia adelante y Home (<= 0.0°)"
+                f"J3 (Codo)={q3_deg:.1f}° fuera de rango [{lim_m3[0]:.1f}°, {lim_m3[1]:.1f}°]"
             )
-        
-        # Validación de flexión del codo y protección específica contra la tuerca
+
+        # Validación de flexión del codo y protección mecánica
         is_collision, is_warn, col_msg = self.check_m2_m3_collision(q2_deg, q3_deg)
         if is_collision:
             return (q1_deg, q2_deg, q3_deg), False, (
-                f"COLISIÓN EVITADA: {col_msg}"
-            )
-        if not (lim_m3[0] <= q3_deg <= lim_m3[1]):
-            return (q1_deg, q2_deg, q3_deg), False, (
-                f"J3 (Codo)={q3_deg:.1f}° fuera de rango [{lim_m3[0]:.1f}°, {lim_m3[1]:.1f}°]"
+                f"LÍMITE EXCEDIDO: {col_msg}"
             )
 
         return (q1_deg, q2_deg, q3_deg), True, "OK"
@@ -607,10 +598,13 @@ class Robot3GDLGatoVisionController(tk.Tk):
         if getattr(self, 'motors_free_state', False):
             # En modo MOTORES LIBRES, NUNCA transmitir consignas que reactiven torque o causen tics
             return
-        # REGLA ESTRICTA DE OPERACIÓN:
-        # M3 nunca puede moverse hacia atrás (q3 > 0.0°). Solo Home (0.0°) y adelante (q3 <= 0.0°).
-        if q3 > 0.0:
-            q3 = 0.0
+        # REGLA ESTRICTA DE OPERACIÓN (LÍMITES FÍSICOS EXACTOS):
+        # M1: [-60.0°, +60.0°]
+        # M2: [-60.0°, +60.0°]
+        # M3: [  0.0°, +45.0°]
+        q1 = max(-60.0, min(60.0, float(q1)))
+        q2 = max(-60.0, min(60.0, float(q2)))
+        q3 = max(0.0, min(45.0, float(q3)))
         self.pkt_seq = (self.pkt_seq + 1) % 10000
         payload = f"PKT,{self.pkt_seq},0,ANGLES,{q1:.2f},{q2:.2f},{q3:.2f}"
         cs = self.calculate_checksum(payload)
@@ -836,12 +830,15 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                                 lmin_val = float(sub[1])
                                                 lmax_val = float(sub[2])
                                                 # Asegurar que límites desactualizados en NVS no bloqueen la articulación
-                                                if m_idx == 1:
-                                                    lmin_val = min(lmin_val, -60.0)
-                                                    lmax_val = max(lmax_val, 45.0)
+                                                if m_idx == 0:
+                                                    lmin_val = -60.0
+                                                    lmax_val = 60.0
+                                                elif m_idx == 1:
+                                                    lmin_val = -60.0
+                                                    lmax_val = 60.0
                                                 elif m_idx == 2:
-                                                    lmin_val = min(lmin_val, -90.0)
-                                                    lmax_val = 0.0  # M3 estrictamente Home y adelante (nunca hacia atrás)
+                                                    lmin_val = 0.0
+                                                    lmax_val = 45.0
                                                 self.kin.limits[m_idx] = (lmin_val, lmax_val)
                                                 self.gauge_ranges[m_idx] = (lmin_val, lmax_val)
                                                 if m_idx < len(self.sliders_ax):
@@ -1683,17 +1680,19 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 lmin = min(v1, v2)
                 lmax = max(v1, v2)
 
-                # M2 (Hombro): Se permite mover adelante (-60°) y atrás (+45° con cuidado)
-                if i == 1:
-                    lmin = min(-60.0, lmin)
-                    lmax = min(45.0, max(lmax, 0.0))
-
-                # M3 (Codo): NUNCA hacia atrás (lmax <= 0.0 estricto). Solo Home (0.0°) y adelante.
-                if i == 2:
-                    if lmax > 0.0:
-                        lmax = 0.0
-                    if lmin >= -35.0:
-                        lmin = -90.0
+                # Regla estricta:
+                # M1: [-60.0, 60.0]
+                # M2: [-60.0, 60.0]
+                # M3: [  0.0, 45.0]
+                if i == 0:
+                    lmin = max(-60.0, lmin)
+                    lmax = min(60.0, lmax)
+                elif i == 1:
+                    lmin = max(-60.0, lmin)
+                    lmax = min(60.0, lmax)
+                elif i == 2:
+                    lmin = max(0.0, lmin)
+                    lmax = min(45.0, lmax)
 
                 # Sincronizar las cajas de texto en pantalla con el orden correcto
                 self.ent_lim_min[i].delete(0, tk.END)
@@ -3001,11 +3000,11 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         btn_apply_limits.pack(fill=tk.X, pady=(3, 1))
 
-        # Presets seguros acordes al rango de cada articulación y protección de tuerca
+        # Presets seguros acordes al rango exacto de cada articulación
         joint_presets = [
-            [-45, -20, 0, 20, 45],      # M1: Base
-            [0, 25, 45, 65, 90],        # M2: Hombro
-            [-115, -90, -60, -30, 0]    # M3: Codo (Protegido contra choque de tuerca)
+            [-60, -30, 0, 30, 60],     # M1: Base [-60°, 60°]
+            [-60, -30, 0, 30, 60],     # M2: Hombro [-60°, 60°]
+            [0, 11, 22, 33, 45]        # M3: Codo [0°, 45°]
         ]
 
         for ax in range(3):
@@ -3242,7 +3241,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                     "date": "2026-10-30",
                     "geometry": {"d1": 10.0, "a1": 11.0, "a2": 32.922, "a3": 32.934},
                     "reduction": {"m1": 31.0, "m2": 31.0, "m3": 31.0},
-                    "limits": {"m1": [-60.0, 60.0], "m2": [0.0, 95.0], "m3": [-115.0, 5.0]},
+                    "limits": {"m1": [-60.0, 60.0], "m2": [-60.0, 60.0], "m3": [0.0, 45.0]},
                     "tool": {"type": "Electroimán 12V (GPIO 7)", "pick_z": 6.0, "place_z": 3.0, "hover_z": 8.0},
                     "dynamics": {"speed_mode": "Normal (2400 Hz)", "max_speed_hz": 2400, "accel_hz_s": 2500},
                     "zero_calibrated": True
