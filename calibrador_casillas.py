@@ -66,42 +66,67 @@ class KinematicsEngine:
         self.limits = [(-60.0, 60.0), (-60.0, 60.0), (0.0, 45.0)]
 
     def forward_kinematics(self, q1_deg, q2_deg, q3_deg):
-        """Calcula (X, Y, Z) en cm dado (q1, q2, q3) en grados."""
+        """Calcula (X, Y, Z) en cm dado (q1, q2, q3) en grados bajo cinemática de paralelogramo."""
         q1 = math.radians(q1_deg)
         q2 = math.radians(q2_deg)
         q3 = math.radians(q3_deg)
 
-        r = self.a1 + self.a2 * math.cos(q2) + self.a3 * math.cos(q2 + q3)
+        r = self.a1 + self.a2 * math.cos(q2) + self.a3 * math.cos(q3)
         x = r * math.cos(q1)
         y = r * math.sin(q1)
-        z = self.d1 + self.a2 * math.sin(q2) + self.a3 * math.sin(q2 + q3)
+        z = self.d1 + self.a2 * math.sin(q2) - self.a3 * math.sin(q3)
         return x, y, z
 
     def inverse_kinematics(self, x, y, z):
-        """Calcula (q1, q2, q3) en grados dado (x, y, z) en cm."""
+        """Calcula (q1, q2, q3) en grados dado (x, y, z) en cm para manipulador paralelogramo."""
         q1_deg = math.degrees(math.atan2(y, x))
 
         r_xy = math.sqrt(x**2 + y**2)
         dr = r_xy - self.a1
         dz = z - self.d1
-        dist = math.sqrt(dr**2 + dz**2)
+        dist_sq = dr**2 + dz**2
+        dist = math.sqrt(dist_sq)
 
         max_reach = self.a2 + self.a3
         min_reach = abs(self.a2 - self.a3)
 
-        if dist > max_reach or dist < min_reach:
-            return (0.0, 0.0, 0.0), False, "Fuera de alcance"
+        if dist > max_reach:
+            if dist <= (max_reach + 0.6) and abs(dz) < max_reach:
+                max_dr = math.sqrt(max(0.01, (max_reach - 0.02)**2 - dz**2))
+                dr = min(dr, max_dr)
+                r_xy = dr + self.a1
+                dist_sq = dr**2 + dz**2
+                dist = math.sqrt(dist_sq)
+            else:
+                return (0.0, 0.0, 0.0), False, "Fuera de alcance"
+        if dist < min_reach:
+            return (0.0, 0.0, 0.0), False, "Zona ciega interna"
 
-        cos_q3 = (dr**2 + dz**2 - self.a2**2 - self.a3**2) / (2.0 * self.a2 * self.a3)
-        cos_q3 = max(-1.0, min(1.0, cos_q3))
-        sin_q3 = math.sqrt(max(0.0, 1.0 - cos_q3**2))
-        q3_deg = math.degrees(math.atan2(sin_q3, cos_q3))
+        cos_dth = (dist_sq - self.a2**2 - self.a3**2) / (2.0 * self.a2 * self.a3)
+        cos_dth = max(-1.0, min(1.0, cos_dth))
+        dth = math.acos(cos_dth)
+
+        cos_psi = (dist_sq + self.a2**2 - self.a3**2) / (2.0 * self.a2 * dist)
+        cos_psi = max(-1.0, min(1.0, cos_psi))
+        psi = math.acos(cos_psi)
 
         beta = math.atan2(dz, dr)
-        gamma = math.atan2(self.a3 * sin_q3, self.a2 + self.a3 * cos_q3)
-        q2_deg = math.degrees(beta - gamma)
 
-        return (q1_deg, q2_deg, q3_deg), True, "OK"
+        # Codo arriba y codo abajo
+        sol_up = (q1_deg, math.degrees(beta + psi), math.degrees(-(beta + psi - dth)))
+        sol_down = (q1_deg, math.degrees(beta - psi), math.degrees(-(beta - psi + dth)))
+
+        def is_ok(s):
+            return (self.limits[0][0] - 0.1 <= s[0] <= self.limits[0][1] + 0.1 and
+                    self.limits[1][0] - 0.1 <= s[1] <= self.limits[1][1] + 0.1 and
+                    self.limits[2][0] - 0.1 <= s[2] <= self.limits[2][1] + 0.1)
+
+        if is_ok(sol_up):
+            return sol_up, True, "OK"
+        if is_ok(sol_down):
+            return sol_down, True, "OK"
+
+        return sol_down, False, "Límites articulares excedidos"
 
 
 # ==============================================================================

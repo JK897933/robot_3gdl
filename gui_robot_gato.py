@@ -200,20 +200,26 @@ class RobotMK2Kinematics:
         return False, False, "OK"
 
     # --------------------------------------------------------------------------
-    # 2.1 CINEMÁTICA DIRECTA (FK - FORWARD KINEMATICS)
+    # 2.1 CINEMÁTICA DIRECTA (FK - FORWARD KINEMATICS) [MECANISMO PARALELOGRAMO]
     # --------------------------------------------------------------------------
     def forward_kinematics(self, q1_deg, q2_deg, q3_deg):
         """
         Calcula la posición espacial cartesiana (X, Y, Z) en centímetros
         del efector final a partir de los ángulos articulares dados en grados.
 
-        Formulación trigonométrica:
+        MODELO CINEMÁTICO DE PARALELOGRAMO (DESACOPLADO):
+          En el robot MK2 físico, el motor M3 está montado en la base giratoria
+          y acciona el antebrazo mediante una varilla de empuje/tracción que forma
+          un paralelogramo mecánico de 4 barras. Por tanto, la inclinación del
+          antebrazo (a3) respecto al plano horizontal NO depende del ángulo del hombro (q2),
+          sino directamente del ángulo de M3 (q3 ∈ [0.0°, 45.0°] hacia abajo):
+
           1. Radio horizontal proyectado en el plano radial del brazo:
-             r = a1 + a2*cos(q2) + a3*cos(q2 + q3)
+             r = a1 + a2*cos(q2) + a3*cos(q3)
           2. Proyección sobre los ejes coordenados del mundo:
              X = r * cos(q1)
              Y = r * sin(q1)
-             Z = d1 + a2*sin(q2) + a3*sin(q2 + q3)
+             Z = d1 + a2*sin(q2) - a3*sin(q3)
 
         Retorna:
           (x, y, z) en cm con respecto al centro de la base en Z=0.
@@ -222,36 +228,36 @@ class RobotMK2Kinematics:
         q2 = math.radians(q2_deg)
         q3 = math.radians(q3_deg)
 
-        r = self.a1 + self.a2 * math.cos(q2) + self.a3 * math.cos(q2 + q3)
+        r = self.a1 + self.a2 * math.cos(q2) + self.a3 * math.cos(q3)
         x = r * math.cos(q1)
         y = r * math.sin(q1)
-        z = self.d1 + self.a2 * math.sin(q2) + self.a3 * math.sin(q2 + q3)
+        z = self.d1 + self.a2 * math.sin(q2) - self.a3 * math.sin(q3)
         return x, y, z
 
     # --------------------------------------------------------------------------
-    # 2.2 CINEMÁTICA INVERSA (IK - INVERSE KINEMATICS) >>> [PARTE CLAVE] <<<
+    # 2.2 CINEMÁTICA INVERSA (IK - INVERSE KINEMATICS) >>> [MECANISMO PARALELOGRAMO] <<<
     # --------------------------------------------------------------------------
     def inverse_kinematics(self, x, y, z, elbow_up=True):
         """
         ========================================================================
-        >>> [CÁLCULO DE LA CINEMÁTICA INVERSA DEL ROBOT ANTROPOMÓRFICO MK2] <<<
+        >>> [CINEMÁTICA INVERSA EXACTA: PARALELOGRAMO DESACOPLADO MK2] <<<
         ========================================================================
         Dado un punto objetivo cartesiano (x, y, z) en cm, calcula la terna de
         ángulos articulares (q1, q2, q3) en grados necesarios para posicionar
         el efector final exactamente en ese punto.
 
-        DIAGRAMA GEOMÉTRICO DEL MANIPULADOR:
+        DIAGRAMA GEOMÉTRICO DEL PARALELOGRAMO:
                      Z ^
                        |              (X, Y, Z) Efector Final
                        |                 O (P3)
                        |                /
-                       |         a3    /  (Antebrazo = 32.934 cm)
+                       |         a3    /  (Antebrazo = 32.934 cm, ángulo -q3 a horizontal)
                        |              /
-                       |             O (P2: Codo, ángulo q3)
+                       |             O (P2: Codo, altura Z2 = d1 + a2*sin(q2))
                        |            /
-                       |     a2    /   (Brazo = 32.922 cm)
+                       |     a2    /   (Brazo = 32.922 cm, ángulo q2 a horizontal)
                        |          /
-                       |         O (P1: Hombro, ángulo q2)
+                       |         O (P1: Hombro, altura Z1 = d1)
                        |        /
                        |  a1   /       (Offset horizontal base = 11.0 cm)
                        |      /
@@ -262,55 +268,22 @@ class RobotMK2Kinematics:
                        +-----+--------------------------> R (Plano radial)
                       (0,0,0)
 
-        DESARROLLO MATEMÁTICO PASO A PASO:
+        DESARROLLO MATEMÁTICO:
         ------------------------------------------------------------------------
-        PASO 1: ÁNGULO DE LA BASE (q1)
-          Se desacopla la rotación azimutal proyectando (x, y) en el plano XY:
-             q1 = atan2(y, x)
-
-        PASO 2: REDUCCIÓN AL PLANO RADIAL DEL BRAZO (dr, dz)
-          El robot se proyecta como un mecanismo plano 2R perpendicular a la base:
-             r_xy = sqrt(x^2 + y^2)
-             dr   = r_xy - a1     (distancia horizontal desde el eje del hombro)
-             dz   = z - d1        (distancia vertical desde el eje del hombro)
-             dist = sqrt(dr^2 + dz^2)  (distancia euclidiana del hombro al efector)
-
-        PASO 3: VALIDACIÓN DEL ESPACIO DE TRABAJO (WORKSPACE)
-          Para que exista solución física real, la distancia requerida debe estar
-          dentro del rango de alcance de los dos eslabones móviles (a2 y a3):
-             max_reach = a2 + a3
-             min_reach = |a2 - a3|
-          Si dist > max_reach -> Fuera de alcance (brazo hiper-extendido).
-          Si dist < min_reach -> Singularidad de zona ciega interna.
-
-        PASO 4: ÁNGULO DEL CODO (q3) POR LA LEY DE COSENOS
-          Aplicando la ley del coseno al triángulo formado por a2, a3 y dist:
-             dist^2 = a2^2 + a3^2 - 2*a2*a3*cos(180° - q3)
-             cos(q3) = (dist^2 - a2^2 - a3^2) / (2 * a2 * a3)
-          Se satura cos(q3) en [-1.0, 1.0] para evitar errores numéricos de punto flotante.
-          Para la postura de codo arriba (elbow_up=True, natural en este robot):
-             sin(q3) = -sqrt(1 - cos^2(q3))
-             q3 = atan2(sin(q3), cos(q3))
-
-        PASO 5: ÁNGULO DEL HOMBRO (q2)
-          Se descompone en dos ángulos trigonométricos:
-             beta  = atan2(dz, dr)
-             gamma = atan2(a3*sin(q3), a2 + a3*cos(q3))
-             q2    = beta - gamma
-
-        PASO 6: VALIDACIÓN DE RANGOS MECÁNICOS Y PROTECCIÓN ANTICOLISIÓN
-          Se verifica que q1, q2 y q3 pertenezcan a los intervalos seguros del MK2:
-             limits[0][0] <= q1 <= limits[0][1]
-             limits[1][0] <= q2 <= limits[1][1]
-             limits[2][0] <= q3 <= limits[2][1]
-          Y se ejecuta check_m2_m3_collision(q2, q3) para garantizar que la tuerca
-          articular del reductor M3 jamás colisione físicamente contra el eslabón M2.
-
-        Retorna:
-          ((q1, q2, q3), reachable, status_message)
-          - (q1, q2, q3): Tupla de flotantes con los ángulos calculados en grados.
-          - reachable: Booleano True si el punto es cinemáticamente alcanzable.
-          - status_message: Cadena explicativa ("OK" o motivo del rechazo).
+        1. Base: q1 = atan2(y, x)
+        2. Proyección radial: dr = sqrt(x^2 + y^2) - a1, dz = z - d1, dist = sqrt(dr^2 + dz^2)
+        3. Triángulo de eslabones:
+           cos(Δθ) = (dist^2 - a2^2 - a3^2) / (2 * a2 * a3)
+           cos(ψ)  = (dist^2 + a2^2 - a3^2) / (2 * a2 * dist)
+           β       = atan2(dz, dr)
+        4. Ramas cinemáticas:
+           Rama 1 (Codo Arriba): θ2 = β + ψ, θ3 = θ2 - Δθ  => q2 = θ2, q3 = -θ3
+           Rama 2 (Codo Abajo):  θ2 = β - ψ, θ3 = θ2 + Δθ  => q2 = θ2, q3 = -θ3
+        5. Selección inteligente: Elige la solución cuyos ángulos respeten estrictamente
+           los límites físicos del manipulador:
+             M1: [-60.0°, +60.0°]
+             M2: [-60.0°, +60.0°]
+             M3: [  0.0°, +45.0°]
         ========================================================================
         """
         # --- PASO 1: Rotación de la Base (Giro en plano XY) ---
@@ -325,83 +298,83 @@ class RobotMK2Kinematics:
         dist_sq = dr**2 + dz**2
         dist = math.sqrt(dist_sq)
 
-        # --- PASO 3: Verificación y adaptación inteligente del espacio de trabajo ---
+        # --- PASO 3: Verificación y adaptación suave de frontera de alcance ---
         max_reach = self.a2 + self.a3
         min_reach = abs(self.a2 - self.a3)
 
-        # Adaptación inteligente de envolvente: si dist excede ligeramente el radio máximo
-        # (ej. al descender verticalmente desde Home a X=76.9), acotar dr suavemente
-        # para mantenerse en la frontera geométrica alcanzable sin bloquear la cinemática.
-        if dist > (max_reach - 0.1):
-            if abs(dz) < (max_reach - 0.2):
-                max_dr = math.sqrt(max(0.01, (max_reach - 0.1)**2 - dz**2))
+        if dist > max_reach:
+            if dist <= (max_reach + 0.6) and abs(dz) < max_reach:
+                max_dr = math.sqrt(max(0.01, (max_reach - 0.02)**2 - dz**2))
                 dr = min(dr, max_dr)
                 r_xy = dr + self.a1
-                q1_rad = math.atan2(y, x)
                 x = r_xy * math.cos(q1_rad)
                 y = r_xy * math.sin(q1_rad)
                 dist_sq = dr**2 + dz**2
                 dist = math.sqrt(dist_sq)
-
-        if dist > max_reach:
-            return (0.0, 0.0, 0.0), False, (
-                f"Punto fuera de alcance (Dist={dist:.1f}cm > Max={max_reach:.1f}cm)"
-            )
+            else:
+                return (0.0, 0.0, 0.0), False, (
+                    f"Punto fuera de alcance (Dist={dist:.1f}cm > Max={max_reach:.1f}cm)"
+                )
         if dist < min_reach:
             return (0.0, 0.0, 0.0), False, (
                 f"Punto en zona ciega interna (Dist={dist:.1f}cm < Min={min_reach:.1f}cm)"
             )
 
-        # --- PASO 4: Ángulo del Codo (q3) mediante Ley de Cosenos ---
-        cos_q3 = (dist_sq - self.a2**2 - self.a3**2) / (2.0 * self.a2 * self.a3)
-        # Acotamiento numérico estricto para evitar indeterminación por precisión float
-        cos_q3 = max(-1.0, min(1.0, cos_q3))
+        # --- PASO 4: Solución trigonométrica desacoplada ---
+        cos_dth = (dist_sq - self.a2**2 - self.a3**2) / (2.0 * self.a2 * self.a3)
+        cos_dth = max(-1.0, min(1.0, cos_dth))
+        dth = math.acos(cos_dth)
 
-        # En la convención física y geométrica del robot (código anterior):
-        # M3 opera en el cuadrante positivo [0.0°, 45.0°]
-        sin_q3 = math.sqrt(max(0.0, 1.0 - cos_q3**2))
-        if not elbow_up:
-            sin_q3 = -sin_q3
+        cos_psi = (dist_sq + self.a2**2 - self.a3**2) / (2.0 * self.a2 * dist)
+        cos_psi = max(-1.0, min(1.0, cos_psi))
+        psi = math.acos(cos_psi)
 
-        q3_rad = math.atan2(sin_q3, cos_q3)
-        q3_deg = math.degrees(q3_rad)
-
-        # --- PASO 5: Ángulo del Hombro (q2) por descomposición geométrica ---
         beta = math.atan2(dz, dr)
-        gamma = math.atan2(self.a3 * sin_q3, self.a2 + self.a3 * cos_q3)
-        q2_rad = beta - gamma
-        q2_deg = math.degrees(q2_rad)
 
-        # --- PASO 6: Validación de rangos mecánicos exactos ---
-        # Límites estrictos configurados por el usuario:
-        # M1 (Base):   [-60.0°, +60.0°]
-        # M2 (Hombro): [-60.0°, +60.0°]
-        # M3 (Codo):   [  0.0°, +45.0°]
-        lim_m1 = [-60.0, 60.0]
-        lim_m2 = [-60.0, 60.0]
-        lim_m3 = [0.0, 45.0]
+        # Solución 1 (Codo Arriba):
+        t2_u = beta + psi
+        t3_u = t2_u - dth
+        sol_up = (q1_deg, math.degrees(t2_u), math.degrees(-t3_u))
 
-        if not (lim_m1[0] - 0.05 <= q1_deg <= lim_m1[1] + 0.05):
-            return (q1_deg, q2_deg, q3_deg), False, (
-                f"J1 (Base)={q1_deg:.1f}° fuera de rango [{lim_m1[0]:.1f}°, {lim_m1[1]:.1f}°]"
-            )
-        if not (lim_m2[0] - 0.05 <= q2_deg <= lim_m2[1] + 0.05):
-            return (q1_deg, q2_deg, q3_deg), False, (
-                f"J2 (Hombro)={q2_deg:.1f}° fuera de rango [{lim_m2[0]:.1f}°, {lim_m2[1]:.1f}°]"
-            )
-        if not (lim_m3[0] - 0.05 <= q3_deg <= lim_m3[1] + 0.05):
-            return (q1_deg, q2_deg, q3_deg), False, (
-                f"J3 (Codo)={q3_deg:.1f}° fuera de rango [{lim_m3[0]:.1f}°, {lim_m3[1]:.1f}°]"
+        # Solución 2 (Codo Abajo):
+        t2_d = beta - psi
+        t3_d = t2_d + dth
+        sol_down = (q1_deg, math.degrees(t2_d), math.degrees(-t3_d))
+
+        # --- PASO 5: Filtrado de límites mecánicos exactos ---
+        # M1: [-60.0°, +60.0°]
+        # M2: [-60.0°, +60.0°]
+        # M3: [  0.0°, +45.0°]
+        lim_m1 = self.limits[0]
+        lim_m2 = self.limits[1]
+        lim_m3 = self.limits[2]
+
+        def check_lims(sol):
+            j1, j2, j3 = sol
+            return (lim_m1[0] - 0.1 <= j1 <= lim_m1[1] + 0.1 and
+                    lim_m2[0] - 0.1 <= j2 <= lim_m2[1] + 0.1 and
+                    lim_m3[0] - 0.1 <= j3 <= lim_m3[1] + 0.1)
+
+        v_up = check_lims(sol_up)
+        v_down = check_lims(sol_down)
+
+        if elbow_up and v_up:
+            best = sol_up
+        elif not elbow_up and v_down:
+            best = sol_down
+        elif v_up:
+            best = sol_up
+        elif v_down:
+            best = sol_down
+        else:
+            best = sol_up if elbow_up else sol_down
+            j1, j2, j3 = best
+            return (j1, j2, j3), False, (
+                f"Límites excedidos: M1={j1:.1f}°, M2={j2:.1f}°, M3={j3:.1f}° "
+                f"(Límites M1:[{lim_m1[0]:.0f},{lim_m1[1]:.0f}] M2:[{lim_m2[0]:.0f},{lim_m2[1]:.0f}] M3:[{lim_m3[0]:.0f},{lim_m3[1]:.0f}])"
             )
 
-        # Validación de flexión del codo y protección mecánica
-        is_collision, is_warn, col_msg = self.check_m2_m3_collision(q2_deg, q3_deg)
-        if is_collision:
-            return (q1_deg, q2_deg, q3_deg), False, (
-                f"LÍMITE EXCEDIDO: {col_msg}"
-            )
-
-        return (q1_deg, q2_deg, q3_deg), True, "OK"
+        return best, True, "OK"
 
 
 # ==============================================================================
@@ -412,19 +385,12 @@ class RobotMK2Kinematics:
     def calculate_lagrange_torques(self, q1_deg, q2_deg, q3_deg):
         """
         Calcula los torques estáticos de gravedad (N*m) según el modelo de
-        Lagrange-Euler del robot antropomórfico MK2:
+        Lagrange-Euler para manipulador con mecanismo de paralelogramo desacoplado:
 
         Formulación analítica del vector de gravedad G(q):
-          - tau1 = 0.0 N*m
-            (El eje de rotación de la base es colineal con el vector de gravedad).
-
-          - tau2 = g * m3 * (a3_m * cos(q2 + q3) + a2_m * cos(q2))
-                   + a2_m * g * m2 * cos(q2)
-            (Momento gravitacional resistido por el hombro debido a las masas
-             del brazo y antebrazo proyectadas horizontalmente).
-
-          - tau3 = a3_m * g * m3 * cos(q2 + q3)
-            (Momento gravitacional resistido por el codo debido a la masa del antebrazo).
+          - tau1 = 0.0 N*m (Eje colineal con gravedad).
+          - tau2 = (m2/2 + m3) * g * a2_m * cos(q2)
+          - tau3 = (m3/2) * g * a3_m * cos(q3)
 
         Retorna:
           (tau1, tau2, tau3) en Newtons-metro.
@@ -433,11 +399,8 @@ class RobotMK2Kinematics:
         q3 = math.radians(q3_deg)
 
         tau1 = 0.0
-        tau2 = (
-            self.g * self.m3 * (self.a3_m * math.cos(q2 + q3) + self.a2_m * math.cos(q2)) +
-            self.a2_m * self.g * self.m2 * math.cos(q2)
-        )
-        tau3 = self.a3_m * self.g * self.m3 * math.cos(q2 + q3)
+        tau2 = (self.m2 * 0.5 + self.m3) * self.g * self.a2_m * math.cos(q2)
+        tau3 = self.m3 * 0.5 * self.g * self.a3_m * math.cos(q3)
 
         return tau1, tau2, tau3
 
@@ -1850,19 +1813,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
             lmin = min(self.kin.limits[ax])
             lmax = max(self.kin.limits[ax])
             deg = max(lmin, min(lmax, deg))
-            # M3 nunca puede moverse hacia atrás (deg > 0.0°)
-            if ax == 2 and deg > 0.0:
-                deg = 0.0
-
-            # ️ PROTECCIÓN ANTICOLISIÓN EN TIEMPO REAL: Tuerca articular M2-M3
-            if ax == 2:
-                m3_min = lmin
-                if deg < (m3_min + 6.0):
-                    if hasattr(self, 'lbl_limits_status'):
-                        self.lbl_limits_status.config(
-                            text=f"[ADVERTENCIA]: Tuerca articular M2-M3 a {deg - m3_min:.1f}° del contacto",
-                            fg=COLOR_AMBER_WARNING
-                        )
 
             self.target_angles[ax] = deg
             # Si el usuario manipula un slider, sale del modo libre
@@ -1907,8 +1857,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
             # Protección estricta contra sobre-carrera y colisión de tuerca
             lim_min, lim_max = self.kin.limits[ax]
             val = max(lim_min, min(lim_max, val))
-            if ax == 2 and val > 0.0:
-                val = 0.0  # M3 nunca hacia atrás
             self.target_angles[ax] = val
             if hasattr(self, 'sliders_ax') and ax < len(self.sliders_ax):
                 self.sliders_ax[ax].set(val)
@@ -1919,11 +1867,11 @@ class Robot3GDLGatoVisionController(tk.Tk):
             pass
 
     def cmd_all_presets(self, deg):
-        """Envía el mismo ángulo de reductor a los 3 motores simultáneamente (0°, 180°, 360°)."""
+        """Envía el mismo ángulo de reductor a los 3 motores simultáneamente."""
         for ax in range(3):
             val = float(deg)
-            if ax == 2 and val > 0.0:
-                val = 0.0  # M3 nunca hacia atrás
+            lim_min, lim_max = self.kin.limits[ax]
+            val = max(lim_min, min(lim_max, val))
             self.target_angles[ax] = val
             if hasattr(self, 'sliders_ax') and ax < len(self.sliders_ax):
                 self.sliders_ax[ax].set(val)
@@ -1932,7 +1880,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             self.update_cartesian_entries(xfk, yfk, zfk)
         except Exception:
             pass
-        self.send_angles_command(float(deg), float(deg), float(deg))
+        self.send_angles_command(self.target_angles[0], self.target_angles[1], self.target_angles[2])
 
     # --------------------------------------------------------------------------
     # SECUENCIA AUTOMATIZADA PICK & PLACE (TRAYECTORIAS CINEMÁTICAS)
@@ -2301,8 +2249,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
         p1 = (self.kin.a1 * math.cos(q1), self.kin.a1 * math.sin(q1), self.kin.d1)
         r_elbow = self.kin.a1 + self.kin.a2 * math.cos(q2)
         p2 = (r_elbow * math.cos(q1), r_elbow * math.sin(q1), self.kin.d1 + self.kin.a2 * math.sin(q2))
-        r_ee = r_elbow + self.kin.a3 * math.cos(q2 + q3)
-        p3 = (r_ee * math.cos(q1), r_ee * math.sin(q1), self.kin.d1 + self.kin.a2 * math.sin(q2) + self.kin.a3 * math.sin(q2 + q3))
+        r_ee = r_elbow + self.kin.a3 * math.cos(q3)
+        p3 = (r_ee * math.cos(q1), r_ee * math.sin(q1), p2[2] - self.kin.a3 * math.sin(q3))
 
         u0_j, v0_j = self.project_3d(*p0, cx, cy, scale)
         u1_j, v1_j = self.project_3d(*p1, cx, cy, scale)
@@ -2314,15 +2262,34 @@ class Robot3GDLGatoVisionController(tk.Tk):
         cv.create_line(u0_j, v0_j, u1_j, v1_j, fill=COLOR_CYAN_ACCENT, width=5, capstyle=tk.ROUND)
         cv.create_oval(u0_j - 5, v0_j - 5, u0_j + 5, v0_j + 5, fill=COLOR_CYAN_ACCENT, outline="#ffffff", width=1)
 
+        # Varilla paralela de tracción/empuje (Mecanismo Paralelogramo 4 Barras MK2)
+        rod_h = 4.2  # Altura de los balancines/cuernos articulares
+        p_crank_base = (
+            (self.kin.a1 - rod_h * math.sin(q3)) * math.cos(q1),
+            (self.kin.a1 - rod_h * math.sin(q3)) * math.sin(q1),
+            self.kin.d1 + rod_h * math.cos(q3)
+        )
+        p_crank_elbow = (
+            (r_elbow - rod_h * math.sin(q3)) * math.cos(q1),
+            (r_elbow - rod_h * math.sin(q3)) * math.sin(q1),
+            p2[2] + rod_h * math.cos(q3)
+        )
+        ur_b, vr_b = self.project_3d(*p_crank_base, cx, cy, scale)
+        ur_e, vr_e = self.project_3d(*p_crank_elbow, cx, cy, scale)
+        # Balancines de accionamiento M3 (base y codo)
+        cv.create_line(u1_j, v1_j, ur_b, vr_b, fill="#334155", width=4, capstyle=tk.ROUND)
+        cv.create_line(u2_j, v2_j, ur_e, vr_e, fill="#334155", width=4, capstyle=tk.ROUND)
+        # Varilla negra paralela (guarda sincronía de antebrazo)
+        cv.create_line(ur_b, vr_b, ur_e, vr_e, fill="#0f172a", width=3, capstyle=tk.ROUND)
+
         # Eslabón 2: Brazo Superior (a2 = 32.922 cm)
         cv.create_line(u1_j, v1_j, u2_j, v2_j, fill="#065f46", width=10, capstyle=tk.ROUND)
         cv.create_line(u1_j, v1_j, u2_j, v2_j, fill=COLOR_GREEN_SUCCESS, width=6, capstyle=tk.ROUND)
         cv.create_oval(u1_j - 6, v1_j - 6, u1_j + 6, v1_j + 6, fill="#ffffff", outline=COLOR_GREEN_SUCCESS, width=2)
 
-        # Eslabón 3: Antebrazo con varilla paralela (a3 = 32.934 cm)
+        # Eslabón 3: Antebrazo con orientación desacoplada (a3 = 32.934 cm)
         cv.create_line(u2_j, v2_j, u3_j, v3_j, fill="#9a3412", width=9, capstyle=tk.ROUND)
         cv.create_line(u2_j, v2_j, u3_j, v3_j, fill=COLOR_AMBER_WARNING, width=5, capstyle=tk.ROUND)
-        cv.create_line(u2_j, v2_j - 5, u3_j, v3_j - 5, fill="#fbbf24", width=2)
         cv.create_oval(u2_j - 5, v2_j - 5, u2_j + 5, v2_j + 5, fill="#ffffff", outline=COLOR_AMBER_WARNING, width=2)
 
         # Marcador visual de la Tuerca Articular M2-M3 (Protección Anticolisión)
