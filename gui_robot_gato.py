@@ -2689,6 +2689,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         r_inputs = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
         r_inputs.pack(fill=tk.X, pady=(2, 4))
 
+        tk.Label(r_inputs, text="Destino:", bg=COLOR_BG_CARD, fg="#0284c7", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
         tk.Label(r_inputs, text="X (cm):", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(0, 2))
         self.ent_x = tk.Entry(r_inputs, width=6, bg="#ffffff", fg="#0f172a", font=("Consolas", 10, "bold"), bd=1, relief=tk.SOLID, insertbackground="#0f172a")
         self.ent_x.insert(0, f"{self.cart_x:.1f}")
@@ -2712,30 +2713,52 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
         # Fila 3: Botones de Paso Rápido Jog (Subir / Bajar / Movimiento Cartesiano)
         r_jog = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
-        r_jog.pack(fill=tk.X, pady=(4, 2))
+        r_jog.pack(fill=tk.X, pady=(3, 2))
 
-        tk.Label(r_jog, text="Paso Z:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
-        btn_z_up5 = tk.Button(r_jog, text="▲ +5cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=5.0))
+        tk.Label(r_jog, text="Paso Z:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 3))
+        btn_z_up5 = tk.Button(r_jog, text="▲ +5cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=5.0))
         btn_z_up5.pack(side=tk.LEFT, padx=1)
-        btn_z_up1 = tk.Button(r_jog, text="▲ +1cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=1.0))
+        btn_z_up1 = tk.Button(r_jog, text="▲ +1cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=1.0))
         btn_z_up1.pack(side=tk.LEFT, padx=1)
-        btn_z_dn1 = tk.Button(r_jog, text="▼ -1cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-1.0))
+        btn_z_dn1 = tk.Button(r_jog, text="▼ -1cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-1.0))
         btn_z_dn1.pack(side=tk.LEFT, padx=1)
-        btn_z_dn5 = tk.Button(r_jog, text="▼ -5cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=5, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-5.0))
-        btn_z_dn5.pack(side=tk.LEFT, padx=(1, 8))
+        btn_z_dn5 = tk.Button(r_jog, text="▼ -5cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-5.0))
+        btn_z_dn5.pack(side=tk.LEFT, padx=(1, 6))
 
-        tk.Label(r_jog, text="X/Y:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
-        btn_x_back = tk.Button(r_jog, text="X -2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-2.0))
+        tk.Label(r_jog, text="Paso X:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 2))
+        btn_x_b5 = tk.Button(r_jog, text="X -5", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-5.0))
+        btn_x_b5.pack(side=tk.LEFT, padx=1)
+        btn_x_back = tk.Button(r_jog, text="X -2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-2.0))
         btn_x_back.pack(side=tk.LEFT, padx=1)
-        btn_x_fwd = tk.Button(r_jog, text="X +2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=2.0))
+        btn_x_fwd = tk.Button(r_jog, text="X +2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=2.0))
         btn_x_fwd.pack(side=tk.LEFT, padx=1)
-        btn_y_l = tk.Button(r_jog, text="Y -2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dy=-2.0))
-        btn_y_l.pack(side=tk.LEFT, padx=1)
-        btn_y_r = tk.Button(r_jog, text="Y +2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dy=2.0))
-        btn_y_r.pack(side=tk.LEFT, padx=(1, 4))
+        btn_x_f5 = tk.Button(r_jog, text="X +5", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=5.0))
+        btn_x_f5.pack(side=tk.LEFT, padx=(1, 4))
 
         btn_zero_fast = tk.Button(r_jog, text="⟲ Cero (0,0,0)", bg="#15803d", fg="#ffffff", activebackground="#166534", font=("Segoe UI", 7, "bold"), padx=6, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=self.cmd_home)
         btn_zero_fast.pack(side=tk.RIGHT)
+
+        # Fila 3b: Paso Jog Eje Y (Giro Izquierda / Derecha Incremental)
+        r_jog_y = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
+        r_jog_y.pack(fill=tk.X, pady=(2, 2))
+
+        tk.Label(r_jog_y, text="Paso Y (Incremental):", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 3))
+        for dy_val in [-20.0, -10.0, -5.0, -2.0]:
+            b = tk.Button(
+                r_jog_y, text=f"Y {dy_val:+.0f}", bg="#475569" if abs(dy_val) <= 2 else "#3b82f6",
+                fg="#ffffff", activebackground="#1d4ed8", font=("Segoe UI", 7, "bold"),
+                padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2",
+                command=lambda d=dy_val: self.jog_cartesian(dy=d)
+            )
+            b.pack(side=tk.LEFT, padx=1)
+        for dy_val in [2.0, 5.0, 10.0, 20.0]:
+            b = tk.Button(
+                r_jog_y, text=f"Y +{dy_val:.0f}", bg="#475569" if abs(dy_val) <= 2 else "#3b82f6",
+                fg="#ffffff", activebackground="#1d4ed8", font=("Segoe UI", 7, "bold"),
+                padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2",
+                command=lambda d=dy_val: self.jog_cartesian(dy=d)
+            )
+            b.pack(side=tk.LEFT, padx=1)
 
         # Fila 4: Diagnóstico IK / Error Posicional
         r_diag = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
