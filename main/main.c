@@ -943,12 +943,10 @@ static void steppers_control_task(void *pvParameters) {
         float error = target - r.calibrated_deg;
         float abs_error = fabsf(error);
 
-        // Control con Histéresis de Banda Muerta para erradicar totalmente los tics
-        // Para M3 (Codo con brazo flojo/holgura mecánica):
-        // Se amplía la tolerancia de parada a 1.25° y el umbral de arranque a 2.80°
-        // para que la holgura mecánica del codo no genere micro-oscilaciones o tics.
-        float stop_tol = (i == 2) ? (tol < 1.25f ? 1.25f : tol) : tol;
-        float start_tol = (i == 2) ? 2.80f : (tol * 2.2f);
+        // Control con Histéresis de Banda Muerta de alta precisión multieje:
+        // Mantiene respuesta simultánea y sincronizada en los 3 motores (M1, M2, M3)
+        float stop_tol = (i == 2) ? 0.65f : tol;
+        float start_tol = (i == 2) ? 1.20f : (tol * 1.8f);
 
         if (s_in_position[i]) {
           if (abs_error > start_tol) {
