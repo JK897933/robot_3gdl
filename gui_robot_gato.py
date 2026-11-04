@@ -467,12 +467,12 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.encoder_badge_labels = []
         self.encoder_raw_labels = []
 
-        # Sistema Gestor de Posición Cero (Calibración de Origen 0.0°)
-        # La posición Home corresponde exactamente a la posición cartesiana del actuador en 0.0°
-        hx, hy, hz = self.kin.forward_kinematics(0.0, 0.0, 0.0)
-        self.HOME_X = hx
-        self.HOME_Y = hy
-        self.HOME_Z = hz
+        # Sistema Gestor de Posición Cero y Home de Trabajo Natural:
+        # Home de reposo óptimo en el centro del espacio de trabajo del MK2:
+        # X=55.0cm, Y=0.0cm, Z=10.0cm (articulaciones hombro ~48.1°, codo ~48.1°)
+        self.HOME_X = 55.0
+        self.HOME_Y = 0.0
+        self.HOME_Z = 10.0
         self.zero_modal_shown = True
         self.zero_calibrated = True
         self.motors_free_state = False
@@ -575,11 +575,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
         q1 = max(l1_min, min(l1_max, float(q1)))
         q2 = max(l2_min, min(l2_max, float(q2)))
         q3 = max(l3_min, min(l3_max, float(q3)))
-        # Inversión física de sentido de giro para M2 y M3:
-        # Permite que +X mueva el actuador hacia ADELANTE y -Z baje el actuador hacia la MESA/TABLERO.
         cmd_q1 = float(q1)
-        cmd_q2 = -float(q2)
-        cmd_q3 = -float(q3)
+        cmd_q2 = float(q2)
+        cmd_q3 = float(q3)
         self.pkt_seq = (self.pkt_seq + 1) % 10000
         payload = f"PKT,{self.pkt_seq},0,ANGLES,{cmd_q1:.2f},{cmd_q2:.2f},{cmd_q3:.2f}"
         cs = self.calculate_checksum(payload)
@@ -729,9 +727,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
                             if parts[0] == "TEL3" and len(parts) >= 10:
                                 self.current_angles[0] = float(parts[2])
                                 self.speeds_hz[0]      = int(parts[3])
-                                self.current_angles[1] = -float(parts[5])
+                                self.current_angles[1] = float(parts[5])
                                 self.speeds_hz[1]      = int(parts[6])
-                                self.current_angles[2] = -float(parts[8])
+                                self.current_angles[2] = float(parts[8])
                                 self.speeds_hz[2]      = int(parts[9])
                                 if len(parts) > 10:
                                     self.gripper_state = (parts[10] == '1')
@@ -774,7 +772,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                 m_idx = int(parts[1]) - 1
                                 if 0 <= m_idx < 3:
                                     raw_deg = float(parts[2])
-                                    self.current_angles[m_idx] = -raw_deg if m_idx in (1, 2) else raw_deg
+                                    self.current_angles[m_idx] = raw_deg
                                     self.encoder_status[m_idx]["raw"] = int(parts[3])
                                     self.speeds_hz[m_idx] = int(parts[4])
                                     self.encoder_status[m_idx]["connected"] = True
@@ -869,10 +867,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
                     self.current_angles[0] = float(m1.group(1))
                 m2 = re_j2.search(line)
                 if m2:
-                    self.current_angles[1] = -float(m2.group(1))
+                    self.current_angles[1] = float(m2.group(1))
                 m3 = re_j3.search(line)
                 if m3:
-                    self.current_angles[2] = -float(m3.group(1))
+                    self.current_angles[2] = float(m3.group(1))
 
             except (serial.SerialException, OSError):
                 self.handle_serial_disconnect()
@@ -1776,39 +1774,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 )
 
     def cmd_home(self):
-        """Envía el robot a su posición HOME (Cero Calibrado 0.0°, 0.0°, 0.0°)."""
+        """Envía el robot a su posición HOME (55.0, 0.0, 10.0 cm | Relativo 0,0,0)."""
         self.motors_free_state = False
-        for i in range(3):
-            self.target_angles[i] = 0.0
-
-        xfk, yfk, zfk = self.kin.forward_kinematics(0.0, 0.0, 0.0)
-        def _update_home_ui():
-            try:
-                self._suppress_slider_tx = True
-                for i in range(3):
-                    if hasattr(self, 'sliders_ax') and i < len(self.sliders_ax):
-                        self.sliders_ax[i].set(0.0)
-                    if hasattr(self, 'entries_ax') and i < len(self.entries_ax):
-                        self.entries_ax[i].delete(0, tk.END)
-                        self.entries_ax[i].insert(0, "0.0")
-                self.update_cartesian_entries(xfk, yfk, zfk)
-                if hasattr(self, 'lbl_ik_status'):
-                    self.lbl_ik_status.config(
-                        text="Estado IK: POSICIÓN CERO HOME (0, 0, 0) | Motores a 0.0°",
-                        fg=COLOR_GREEN_SUCCESS
-                    )
-            except Exception:
-                pass
-            finally:
-                self._suppress_slider_tx = False
-        self.dispatch_ui(_update_home_ui)
-
-        self.pkt_seq = (self.pkt_seq + 1) % 10000
-        payload = f"PKT,{self.pkt_seq},0,HOME,0.0,0.0,0.0"
-        cs = self.calculate_checksum(payload)
-        self.send_serial_raw(f"${payload}*{cs:02X}\r\n")
-        self.send_serial_raw("HOME\n")
-        self.send_angles_command(0.0, 0.0, 0.0)
+        self.cmd_goto_xyz(self.HOME_X, self.HOME_Y, self.HOME_Z)
 
     def on_joint_slider(self, ax, val):
         """
@@ -3965,11 +3933,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
             if hasattr(self, 'entries_ax') and i < len(self.entries_ax):
                 self.entries_ax[i].delete(0, tk.END)
                 self.entries_ax[i].insert(0, "0.0")
-        hx, hy, hz = self.kin.forward_kinematics(0.0, 0.0, 0.0)
-        self.HOME_X = hx
-        self.HOME_Y = hy
-        self.HOME_Z = hz
-        self.update_cartesian_entries(hx, hy, hz)
+        self.HOME_X = 55.0
+        self.HOME_Y = 0.0
+        self.HOME_Z = 10.0
+        self.update_cartesian_entries(55.0, 0.0, 10.0)
 
     def cmd_load_game(self):
         """Carga el punto cero previamente guardado en Flash NVS y desplaza el robot suavemente a 0.0°."""
@@ -3990,11 +3957,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
             if hasattr(self, 'entries_ax') and i < len(self.entries_ax):
                 self.entries_ax[i].delete(0, tk.END)
                 self.entries_ax[i].insert(0, "0.0")
-        hx, hy, hz = self.kin.forward_kinematics(0.0, 0.0, 0.0)
-        self.HOME_X = hx
-        self.HOME_Y = hy
-        self.HOME_Z = hz
-        self.update_cartesian_entries(hx, hy, hz)
+        self.HOME_X = 55.0
+        self.HOME_Y = 0.0
+        self.HOME_Z = 10.0
+        self.update_cartesian_entries(55.0, 0.0, 10.0)
         self.update_zero_bar_ui()
         # Enviar consigna de regreso al cero calibrado
         self.send_angles_command(0.0, 0.0, 0.0)
