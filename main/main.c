@@ -207,12 +207,12 @@ static float g_min_speed_hz = 35.0f;
 static float g_accel_hz_per_sec = 2600.0f;
 
 // Límites angulares de seguridad configurables (salida del reductor en grados)
-// Límites estrictos del robot:
-// M1: [-60.0°, +60.0°]
-// M2: [-60.0°, +60.0°]
-// M3: [  0.0°, +45.0°] (ni más ni menos)
-static float g_limit_min_deg[NUM_MOTORS] = {-60.0f, -60.0f, 0.0f};
-static float g_limit_max_deg[NUM_MOTORS] = {60.0f, 60.0f, 85.0f};
+// Límites del robot:
+// M1 (Base):   [-180.0°, +180.0°] (Giro completo 360°)
+// M2 (Hombro): [-90.0°,  +90.0°]
+// M3 (Codo):   [-90.0°,  +90.0°]
+static float g_limit_min_deg[NUM_MOTORS] = {-180.0f, -90.0f, -90.0f};
+static float g_limit_max_deg[NUM_MOTORS] = {180.0f, 90.0f, 90.0f};
 
 // Telemetría y Estado Compartido
 static as5600_reading_t g_last_reading[NUM_MOTORS] = {0};
@@ -757,16 +757,16 @@ static void nvs_load_settings(void) {
       if (nvs_get_i32(handle, key_max, &raw_lmax) == ESP_OK) {
         g_limit_max_deg[m] = (float)raw_lmax / 100.0f;
       }
-      // Sanitización de límites estrictos: M1 [-60, 60], M2 [-60, 60], M3 [0, 45]
+      // Sanitización de límites amplios (360° M1, 180° M2/M3)
       if (m == 0) {
-        if (g_limit_min_deg[0] < -60.0f) g_limit_min_deg[0] = -60.0f;
-        if (g_limit_max_deg[0] > 60.0f)  g_limit_max_deg[0] = 60.0f;
+        if (g_limit_min_deg[0] < -180.0f) g_limit_min_deg[0] = -180.0f;
+        if (g_limit_max_deg[0] > 180.0f)  g_limit_max_deg[0] = 180.0f;
       } else if (m == 1) {
-        if (g_limit_min_deg[1] < -60.0f) g_limit_min_deg[1] = -60.0f;
-        if (g_limit_max_deg[1] > 60.0f)  g_limit_max_deg[1] = 60.0f;
+        if (g_limit_min_deg[1] < -90.0f) g_limit_min_deg[1] = -90.0f;
+        if (g_limit_max_deg[1] > 90.0f)  g_limit_max_deg[1] = 90.0f;
       } else if (m == 2) {
-        if (g_limit_min_deg[2] < 0.0f)   g_limit_min_deg[2] = 0.0f;
-        if (g_limit_max_deg[2] > 85.0f)  g_limit_max_deg[2] = 85.0f;
+        if (g_limit_min_deg[2] < -90.0f) g_limit_min_deg[2] = -90.0f;
+        if (g_limit_max_deg[2] > 90.0f)  g_limit_max_deg[2] = 90.0f;
       }
       ESP_LOGI(TAG, "Motor %d Límites de Seguridad NVS: [%.1f, %.1f] deg",
                m + 1, g_limit_min_deg[m], g_limit_max_deg[m]);

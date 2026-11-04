@@ -175,28 +175,29 @@ class RobotMK2Kinematics:
 
         # Rango admisible de movimiento angular seguro (grados - Reductor 31:1)
         # Límites del robot:
-        # M1 (Base):   [-60.0°, +60.0°] (o hasta 180° si el usuario lo amplía)
-        # M2 (Hombro): [-60.0°, +60.0°]
-        # M3 (Codo):   [  0.0°, +85.0°] (Amplitud completa para alcanzar tablero y mesa Z=-29.1)
+        # M1 (Base):   [-180.0°, +180.0°] (Giro libre completo 360°)
+        # M2 (Hombro): [-90.0°,  +90.0°]
+        # M3 (Codo):   [-90.0°,  +90.0°]
         self.limits = [
-            (-60.0, 60.0),   # J1 (Base - Yaw): Giro seguro [-60°, +60°]
-            (-60.0, 60.0),   # J2 (Hombro - Pitch): [-60°, +60°]
-            (0.0, 85.0)      # J3 (Codo - Pitch): [0.0°, 85.0°] (Permite bajar a mesa y avanzar sin trabas)
+            (-180.0, 180.0), # J1 (Base - Yaw): Giro completo 360° [-180°, +180°]
+            (-90.0, 90.0),   # J2 (Hombro - Pitch): [-90°, +90°]
+            (-90.0, 90.0)    # J3 (Codo - Pitch): [-90°, +90°]
         ]
         self.nut_collision_margin_deg = 2.0  # Margen de alerta temprana de colisión
 
     def check_m2_m3_collision(self, q2_deg, q3_deg):
         """
-        Verifica en tiempo real los límites seguros de M2 y M3.
-        M3 está acotado a [0.0°, 85.0°] para permitir descenso a mesa y tablero.
-        
+        Verificación de límites articulares.
+        Con rango completo [-90°, +90°] se permite total libertad de movimiento.
         Retorna:
           (colliding: bool, warning: bool, message: str)
         """
-        if q3_deg < -0.5:
-            return True, True, f"M3 bloqueado: Ángulo menor que el mínimo ({q3_deg:+.1f}° < 0.0°). Rango admisible [0.0°, 85.0°]."
-        if q3_deg > 85.5:
-            return True, True, f"M3 bloqueado: Ángulo mayor que el máximo ({q3_deg:+.1f}° > 85.0°). Rango admisible [0.0°, 85.0°]."
+        lim_m2 = self.limits[1]
+        lim_m3 = self.limits[2]
+        if q3_deg < lim_m3[0] or q3_deg > lim_m3[1]:
+            return True, True, f"M3 fuera de rango [{lim_m3[0]:.0f}°, {lim_m3[1]:.0f}°]"
+        if q2_deg < lim_m2[0] or q2_deg > lim_m2[1]:
+            return True, True, f"M2 fuera de rango [{lim_m2[0]:.0f}°, {lim_m2[1]:.0f}°]"
         return False, False, "OK"
 
     # --------------------------------------------------------------------------
@@ -467,17 +468,17 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.encoder_raw_labels = []
 
         # Sistema Gestor de Posición Cero (Calibración de Origen 0.0°)
-        # Posición fija establecida permanentemente en la base elevada sobre la caja
-        # Home de reposo: X=55.0cm (recogido natural), lo que permite avanzar hacia ADELANTE hasta +20cm (X=75cm)
-        self.HOME_X = 55.0
-        self.HOME_Y = 0.0
-        self.HOME_Z = 10.0
+        # La posición Home corresponde exactamente a la posición cartesiana del actuador en 0.0°
+        hx, hy, hz = self.kin.forward_kinematics(0.0, 0.0, 0.0)
+        self.HOME_X = hx
+        self.HOME_Y = hy
+        self.HOME_Z = hz
         self.zero_modal_shown = True
         self.zero_calibrated = True
         self.motors_free_state = False
 
-        # Sistema de Coordenadas: Relativo a Cero Home en Caja (0.0, 0.0, 0.0)
-        # Subir: +Z | Bajar hacia el tablero / mesa: -Z (Mesa a Z_rel = -39.1 cm)
+        # Sistema de Coordenadas: Relativo a Cero Home (0.0, 0.0, 0.0)
+        # Inicia exactamente en (0.0, 0.0, 0.0) referenciado al actuador físico
         self.coord_mode_relative = True
         self.cart_x = 0.0
         self.cart_y = 0.0
@@ -574,8 +575,13 @@ class Robot3GDLGatoVisionController(tk.Tk):
         q1 = max(l1_min, min(l1_max, float(q1)))
         q2 = max(l2_min, min(l2_max, float(q2)))
         q3 = max(l3_min, min(l3_max, float(q3)))
+        # Inversión física de sentido de giro para M2 y M3:
+        # Permite que +X mueva el actuador hacia ADELANTE y -Z baje el actuador hacia la MESA/TABLERO.
+        cmd_q1 = float(q1)
+        cmd_q2 = -float(q2)
+        cmd_q3 = -float(q3)
         self.pkt_seq = (self.pkt_seq + 1) % 10000
-        payload = f"PKT,{self.pkt_seq},0,ANGLES,{q1:.2f},{q2:.2f},{q3:.2f}"
+        payload = f"PKT,{self.pkt_seq},0,ANGLES,{cmd_q1:.2f},{cmd_q2:.2f},{cmd_q3:.2f}"
         cs = self.calculate_checksum(payload)
         self.send_serial_raw(f"${payload}*{cs:02X}\r\n")
 
@@ -723,9 +729,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
                             if parts[0] == "TEL3" and len(parts) >= 10:
                                 self.current_angles[0] = float(parts[2])
                                 self.speeds_hz[0]      = int(parts[3])
-                                self.current_angles[1] = float(parts[5])
+                                self.current_angles[1] = -float(parts[5])
                                 self.speeds_hz[1]      = int(parts[6])
-                                self.current_angles[2] = float(parts[8])
+                                self.current_angles[2] = -float(parts[8])
                                 self.speeds_hz[2]      = int(parts[9])
                                 if len(parts) > 10:
                                     self.gripper_state = (parts[10] == '1')
@@ -767,7 +773,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
                             if parts[0] == "TEL" and len(parts) >= 6:
                                 m_idx = int(parts[1]) - 1
                                 if 0 <= m_idx < 3:
-                                    self.current_angles[m_idx] = float(parts[2])
+                                    raw_deg = float(parts[2])
+                                    self.current_angles[m_idx] = -raw_deg if m_idx in (1, 2) else raw_deg
                                     self.encoder_status[m_idx]["raw"] = int(parts[3])
                                     self.speeds_hz[m_idx] = int(parts[4])
                                     self.encoder_status[m_idx]["connected"] = True
@@ -798,16 +805,16 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                             if 0 <= m_idx < 3:
                                                 lmin_val = float(sub[1])
                                                 lmax_val = float(sub[2])
-                                                # Asegurar que límites desactualizados en NVS no bloqueen la articulación
+                                                # Asegurar límites amplios para no restringir el movimiento
                                                 if m_idx == 0:
-                                                    lmin_val = -60.0
-                                                    lmax_val = 60.0
+                                                    lmin_val = -180.0
+                                                    lmax_val = 180.0
                                                 elif m_idx == 1:
-                                                    lmin_val = -60.0
-                                                    lmax_val = 60.0
+                                                    lmin_val = -90.0
+                                                    lmax_val = 90.0
                                                 elif m_idx == 2:
-                                                    lmin_val = 0.0
-                                                    lmax_val = 45.0
+                                                    lmin_val = -90.0
+                                                    lmax_val = 90.0
                                                 self.kin.limits[m_idx] = (lmin_val, lmax_val)
                                                 self.gauge_ranges[m_idx] = (lmin_val, lmax_val)
                                                 if m_idx < len(self.sliders_ax):
@@ -862,10 +869,10 @@ class Robot3GDLGatoVisionController(tk.Tk):
                     self.current_angles[0] = float(m1.group(1))
                 m2 = re_j2.search(line)
                 if m2:
-                    self.current_angles[1] = float(m2.group(1))
+                    self.current_angles[1] = -float(m2.group(1))
                 m3 = re_j3.search(line)
                 if m3:
-                    self.current_angles[2] = float(m3.group(1))
+                    self.current_angles[2] = -float(m3.group(1))
 
             except (serial.SerialException, OSError):
                 self.handle_serial_disconnect()
@@ -1214,8 +1221,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             return
 
         is_rel = getattr(self, 'coord_mode_relative', True)
-        # Detección inteligente: Si ux > 35.0, es una coordenada absoluta de alcance real del MK2 (radio ~40 a 76 cm)
-        if is_rel and -35.0 <= ux <= 35.0 and -35.0 <= uy <= 35.0:
+        if is_rel:
             x_abs = self.HOME_X + ux
             y_abs = self.HOME_Y + uy
             z_abs = self.HOME_Z + uz
@@ -3959,6 +3965,11 @@ class Robot3GDLGatoVisionController(tk.Tk):
             if hasattr(self, 'entries_ax') and i < len(self.entries_ax):
                 self.entries_ax[i].delete(0, tk.END)
                 self.entries_ax[i].insert(0, "0.0")
+        hx, hy, hz = self.kin.forward_kinematics(0.0, 0.0, 0.0)
+        self.HOME_X = hx
+        self.HOME_Y = hy
+        self.HOME_Z = hz
+        self.update_cartesian_entries(hx, hy, hz)
 
     def cmd_load_game(self):
         """Carga el punto cero previamente guardado en Flash NVS y desplaza el robot suavemente a 0.0°."""
@@ -3979,6 +3990,11 @@ class Robot3GDLGatoVisionController(tk.Tk):
             if hasattr(self, 'entries_ax') and i < len(self.entries_ax):
                 self.entries_ax[i].delete(0, tk.END)
                 self.entries_ax[i].insert(0, "0.0")
+        hx, hy, hz = self.kin.forward_kinematics(0.0, 0.0, 0.0)
+        self.HOME_X = hx
+        self.HOME_Y = hy
+        self.HOME_Z = hz
+        self.update_cartesian_entries(hx, hy, hz)
         self.update_zero_bar_ui()
         # Enviar consigna de regreso al cero calibrado
         self.send_angles_command(0.0, 0.0, 0.0)
