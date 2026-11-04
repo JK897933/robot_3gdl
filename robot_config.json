@@ -3,7 +3,7 @@
     "profiles": {
         "Robot MK2 Gato 31:1 (Predeterminado)": {
             "name": "Robot MK2 Gato 31:1 (Predeterminado)",
-            "description": "Configuración estándar SolidWorks con reductores cicloidales 31:1 y electroimán en GPIO 7",
+            "description": "Configuraci\u00f3n est\u00e1ndar SolidWorks con reductores cicloidales 31:1 y electroim\u00e1n en GPIO 7",
             "date": "2026-10-30",
             "geometry": {
                 "d1": 10.0,
@@ -27,7 +27,7 @@
                 ],
                 "m3": [
                     0.0,
-                    45.0
+                    85.0
                 ]
             },
             "tool": {
@@ -45,7 +45,7 @@
         },
         "Robot Prototipo Compacto (Laboratorio)": {
             "name": "Robot Prototipo Compacto (Laboratorio)",
-            "description": "Perfil de prueba con eslabones cortos y velocidad reducida para máxima seguridad",
+            "description": "Perfil de prueba con eslabones cortos y velocidad reducida para m\u00e1xima seguridad",
             "date": "2026-10-30",
             "geometry": {
                 "d1": 8.0,
@@ -69,7 +69,7 @@
                 ],
                 "m3": [
                     0.0,
-                    45.0
+                    85.0
                 ]
             },
             "tool": {
@@ -111,7 +111,7 @@
                 ],
                 "m3": [
                     0.0,
-                    45.0
+                    85.0
                 ]
             },
             "tool": {
@@ -153,7 +153,7 @@
                 ],
                 "m3": [
                     0.0,
-                    45.0
+                    85.0
                 ]
             },
             "tool": {
@@ -195,7 +195,7 @@
                 ],
                 "m3": [
                     0.0,
-                    45.0
+                    85.0
                 ]
             },
             "tool": {
@@ -237,7 +237,7 @@
                 ],
                 "m3": [
                     0.0,
-                    45.0
+                    85.0
                 ]
             },
             "tool": {

@@ -212,7 +212,7 @@ static float g_accel_hz_per_sec = 2600.0f;
 // M2: [-60.0°, +60.0°]
 // M3: [  0.0°, +45.0°] (ni más ni menos)
 static float g_limit_min_deg[NUM_MOTORS] = {-60.0f, -60.0f, 0.0f};
-static float g_limit_max_deg[NUM_MOTORS] = {60.0f, 60.0f, 45.0f};
+static float g_limit_max_deg[NUM_MOTORS] = {60.0f, 60.0f, 85.0f};
 
 // Telemetría y Estado Compartido
 static as5600_reading_t g_last_reading[NUM_MOTORS] = {0};
@@ -766,7 +766,7 @@ static void nvs_load_settings(void) {
         if (g_limit_max_deg[1] > 60.0f)  g_limit_max_deg[1] = 60.0f;
       } else if (m == 2) {
         if (g_limit_min_deg[2] < 0.0f)   g_limit_min_deg[2] = 0.0f;
-        if (g_limit_max_deg[2] > 45.0f)  g_limit_max_deg[2] = 45.0f;
+        if (g_limit_max_deg[2] > 85.0f)  g_limit_max_deg[2] = 85.0f;
       }
       ESP_LOGI(TAG, "Motor %d Límites de Seguridad NVS: [%.1f, %.1f] deg",
                m + 1, g_limit_min_deg[m], g_limit_max_deg[m]);

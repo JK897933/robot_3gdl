@@ -174,29 +174,29 @@ class RobotMK2Kinematics:
         self.g = 9.81       # m/s^2: Aceleración de la gravedad terrestre
 
         # Rango admisible de movimiento angular seguro (grados - Reductor 31:1)
-        # Límites estrictos del robot:
-        # M1 (Base):   [-60.0°, +60.0°]
+        # Límites del robot:
+        # M1 (Base):   [-60.0°, +60.0°] (o hasta 180° si el usuario lo amplía)
         # M2 (Hombro): [-60.0°, +60.0°]
-        # M3 (Codo):   [  0.0°, +45.0°]
+        # M3 (Codo):   [  0.0°, +85.0°] (Amplitud completa para alcanzar tablero y mesa Z=-29.1)
         self.limits = [
             (-60.0, 60.0),   # J1 (Base - Yaw): Giro seguro [-60°, +60°]
             (-60.0, 60.0),   # J2 (Hombro - Pitch): [-60°, +60°]
-            (0.0, 45.0)      # J3 (Codo - Pitch): [0.0°, 45.0°] (ni más ni menos)
+            (0.0, 85.0)      # J3 (Codo - Pitch): [0.0°, 85.0°] (Permite bajar a mesa y avanzar sin trabas)
         ]
         self.nut_collision_margin_deg = 2.0  # Margen de alerta temprana de colisión
 
     def check_m2_m3_collision(self, q2_deg, q3_deg):
         """
         Verifica en tiempo real los límites seguros de M2 y M3.
-        M3 está estrictamente acotado a [0.0°, 45.0°].
+        M3 está acotado a [0.0°, 85.0°] para permitir descenso a mesa y tablero.
         
         Retorna:
           (colliding: bool, warning: bool, message: str)
         """
         if q3_deg < -0.5:
-            return True, True, f"M3 bloqueado: Ángulo menor que el mínimo ({q3_deg:+.1f}° < 0.0°). Rango admisible [0.0°, 45.0°]."
-        if q3_deg > 45.5:
-            return True, True, f"M3 bloqueado: Ángulo mayor que el máximo ({q3_deg:+.1f}° > 45.0°). Rango admisible [0.0°, 45.0°]."
+            return True, True, f"M3 bloqueado: Ángulo menor que el mínimo ({q3_deg:+.1f}° < 0.0°). Rango admisible [0.0°, 85.0°]."
+        if q3_deg > 85.5:
+            return True, True, f"M3 bloqueado: Ángulo mayor que el máximo ({q3_deg:+.1f}° > 85.0°). Rango admisible [0.0°, 85.0°]."
         return False, False, "OK"
 
     # --------------------------------------------------------------------------
@@ -468,7 +468,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
         # Sistema Gestor de Posición Cero (Calibración de Origen 0.0°)
         # Posición fija establecida permanentemente en la base elevada sobre la caja
-        self.HOME_X = 76.856
+        # Home de reposo: X=55.0cm (recogido natural), lo que permite avanzar hacia ADELANTE hasta +20cm (X=75cm)
+        self.HOME_X = 55.0
         self.HOME_Y = 0.0
         self.HOME_Z = 10.0
         self.zero_modal_shown = True
@@ -1651,7 +1652,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 # Regla de rangos admisibles:
                 # M1: [-180.0, 180.0] (La base puede girar hasta 360° si el usuario lo requiere)
                 # M2: [-60.0, 60.0]
-                # M3: [  0.0, 45.0]
+                # M3: [  0.0, 85.0] (Amplitud completa para alcanzar casillas y bajar a mesa)
                 if i == 0:
                     lmin = max(-180.0, lmin)
                     lmax = min(180.0, lmax)
@@ -1660,7 +1661,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                     lmax = min(60.0, lmax)
                 elif i == 2:
                     lmin = max(0.0, lmin)
-                    lmax = min(45.0, lmax)
+                    lmax = min(90.0, lmax)
 
                 # Sincronizar las cajas de texto en pantalla con el orden correcto
                 self.ent_lim_min[i].delete(0, tk.END)
@@ -2999,7 +3000,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         joint_presets = [
             [-60, -30, 0, 30, 60],     # M1: Base [-60°, 60°]
             [-60, -30, 0, 30, 60],     # M2: Hombro [-60°, 60°]
-            [0, 11, 22, 33, 45]        # M3: Codo [0°, 45°]
+            [0, 20, 40, 60, 80]        # M3: Codo [0°, 85°]
         ]
 
         for ax in range(3):
