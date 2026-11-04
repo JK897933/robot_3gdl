@@ -302,19 +302,24 @@ class RobotMK2Kinematics:
         max_reach = self.a2 + self.a3
         min_reach = abs(self.a2 - self.a3)
 
-        if dist > max_reach:
-            if dist <= (max_reach + 0.6) and abs(dz) < max_reach:
-                max_dr = math.sqrt(max(0.01, (max_reach - 0.02)**2 - dz**2))
-                dr = min(dr, max_dr)
-                r_xy = dr + self.a1
-                x = r_xy * math.cos(q1_rad)
-                y = r_xy * math.sin(q1_rad)
-                dist_sq = dr**2 + dz**2
-                dist = math.sqrt(dist_sq)
-            else:
-                return (0.0, 0.0, 0.0), False, (
-                    f"Punto fuera de alcance (Dist={dist:.1f}cm > Max={max_reach:.1f}cm)"
-                )
+        if abs(dz) >= max_reach:
+            return (0.0, 0.0, 0.0), False, (
+                f"Altura Z={z:.1f}cm fuera de alcance vertical (Max={self.d1 + max_reach:.1f}cm, Min={self.d1 - max_reach:.1f}cm)"
+            )
+
+        # Proyección inteligente de envolvente radial:
+        # Si el punto cartesiano (x, y) tiene un radio que excede el alcance horizontal máximo a esa altura z,
+        # se acota dr al radio geométricamente alcanzable en esa dirección angular (q1).
+        # Esto permite mover Y (izquierda/derecha) y X libremente sin bloqueos por frontera de alcance.
+        max_dr = math.sqrt(max(0.0, max_reach**2 - dz**2))
+        if dr > max_dr:
+            dr = max_dr
+            r_xy = dr + self.a1
+            x = r_xy * math.cos(q1_rad)
+            y = r_xy * math.sin(q1_rad)
+            dist_sq = dr**2 + dz**2
+            dist = math.sqrt(dist_sq)
+
         if dist < min_reach:
             return (0.0, 0.0, 0.0), False, (
                 f"Punto en zona ciega interna (Dist={dist:.1f}cm < Min={min_reach:.1f}cm)"
@@ -561,13 +566,13 @@ class Robot3GDLGatoVisionController(tk.Tk):
         if getattr(self, 'motors_free_state', False):
             # En modo MOTORES LIBRES, NUNCA transmitir consignas que reactiven torque o causen tics
             return
-        # REGLA ESTRICTA DE OPERACIÓN (LÍMITES FÍSICOS EXACTOS):
-        # M1: [-60.0°, +60.0°]
-        # M2: [-60.0°, +60.0°]
-        # M3: [  0.0°, +45.0°]
-        q1 = max(-60.0, min(60.0, float(q1)))
-        q2 = max(-60.0, min(60.0, float(q2)))
-        q3 = max(0.0, min(45.0, float(q3)))
+        # REGLA DE OPERACIÓN (LÍMITES CONFIGURADOS):
+        l1_min, l1_max = self.kin.limits[0]
+        l2_min, l2_max = self.kin.limits[1]
+        l3_min, l3_max = self.kin.limits[2]
+        q1 = max(l1_min, min(l1_max, float(q1)))
+        q2 = max(l2_min, min(l2_max, float(q2)))
+        q3 = max(l3_min, min(l3_max, float(q3)))
         self.pkt_seq = (self.pkt_seq + 1) % 10000
         payload = f"PKT,{self.pkt_seq},0,ANGLES,{q1:.2f},{q2:.2f},{q3:.2f}"
         cs = self.calculate_checksum(payload)
@@ -1643,13 +1648,13 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 lmin = min(v1, v2)
                 lmax = max(v1, v2)
 
-                # Regla estricta:
-                # M1: [-60.0, 60.0]
+                # Regla de rangos admisibles:
+                # M1: [-180.0, 180.0] (La base puede girar hasta 360° si el usuario lo requiere)
                 # M2: [-60.0, 60.0]
                 # M3: [  0.0, 45.0]
                 if i == 0:
-                    lmin = max(-60.0, lmin)
-                    lmax = min(60.0, lmax)
+                    lmin = max(-180.0, lmin)
+                    lmax = min(180.0, lmax)
                 elif i == 1:
                     lmin = max(-60.0, lmin)
                     lmax = min(60.0, lmax)

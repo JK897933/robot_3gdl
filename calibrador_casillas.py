@@ -90,15 +90,16 @@ class KinematicsEngine:
         max_reach = self.a2 + self.a3
         min_reach = abs(self.a2 - self.a3)
 
-        if dist > max_reach:
-            if dist <= (max_reach + 0.6) and abs(dz) < max_reach:
-                max_dr = math.sqrt(max(0.01, (max_reach - 0.02)**2 - dz**2))
-                dr = min(dr, max_dr)
-                r_xy = dr + self.a1
-                dist_sq = dr**2 + dz**2
-                dist = math.sqrt(dist_sq)
-            else:
-                return (0.0, 0.0, 0.0), False, "Fuera de alcance"
+        if abs(dz) >= max_reach:
+            return (0.0, 0.0, 0.0), False, "Fuera de alcance vertical"
+
+        max_dr = math.sqrt(max(0.0, max_reach**2 - dz**2))
+        if dr > max_dr:
+            dr = max_dr
+            r_xy = dr + self.a1
+            dist_sq = dr**2 + dz**2
+            dist = math.sqrt(dist_sq)
+
         if dist < min_reach:
             return (0.0, 0.0, 0.0), False, "Zona ciega interna"
 
