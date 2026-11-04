@@ -181,7 +181,7 @@ class RobotMK2Kinematics:
         self.limits = [
             (-180.0, 180.0), # J1 (Base - Yaw): Giro completo 360° [-180°, +180°]
             (-90.0, 90.0),   # J2 (Hombro - Pitch): [-90°, +90°]
-            (-90.0, 90.0)    # J3 (Codo - Pitch): [-90°, +90°]
+            (0.0, 85.0)      # J3 (Codo - Pitch): [0.0°, 85.0°] Protege contra choque de tuerca en reductores
         ]
         self.nut_collision_margin_deg = 2.0  # Margen de alerta temprana de colisión
 
