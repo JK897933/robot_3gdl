@@ -291,7 +291,7 @@ def create_report():
 
     data_dh = [
         [Paragraph("Articulación $i$", table_header_style), Paragraph("Parámetro $\\theta_i$", table_header_style), Paragraph("Offset $d_i$ (cm)", table_header_style), Paragraph("Longitud $a_i$ (cm)", table_header_style), Paragraph("Giro $\\alpha_i$ (rad)", table_header_style), Paragraph("Reducción / Masa", table_header_style)],
-        [Paragraph("<b>Junta 1: Base (Yaw)</b>", table_cell_bold), Paragraph("$q_1$", table_cell_style), Paragraph("<b>10.0</b> (d1)", table_cell_style), Paragraph("<b>11.0</b> (a1)", table_cell_style), Paragraph("$\\pi / 2$ ($90^\\circ$)", table_cell_style), Paragraph("31:1 | 0.50 kg", table_cell_style)],
+        [Paragraph("<b>Junta 1: Base (Yaw)</b>", table_cell_bold), Paragraph("$q_1$", table_cell_style), Paragraph("<b>18.0</b> (d1)", table_cell_style), Paragraph("<b>11.0</b> (a1)", table_cell_style), Paragraph("$\\pi / 2$ ($90^\\circ$)", table_cell_style), Paragraph("31:1 | 0.50 kg", table_cell_style)],
         [Paragraph("<b>Junta 2: Hombro (Pitch)</b>", table_cell_bold), Paragraph("$q_2$", table_cell_style), Paragraph("0.0", table_cell_style), Paragraph("<b>32.92</b> (a2)", table_cell_style), Paragraph("0.0 ($0^\\circ$)", table_cell_style), Paragraph("31:1 | 0.40 kg", table_cell_style)],
         [Paragraph("<b>Junta 3: Codo (Pitch)</b>", table_cell_bold), Paragraph("$q_3$", table_cell_style), Paragraph("0.0", table_cell_style), Paragraph("<b>32.93</b> (a3)", table_cell_style), Paragraph("0.0 ($0^\\circ$)", table_cell_style), Paragraph("31:1 | 0.30 kg", table_cell_style)]
     ]
