@@ -6,7 +6,7 @@
             "description": "Configuración estándar SolidWorks con reductores cicloidales 31:1 y electroimán en GPIO 7",
             "date": "2026-10-30",
             "geometry": {
-                "d1": 10.0,
+                "d1": 18.0,
                 "a1": 11.0,
                 "a2": 32.922,
                 "a3": 32.934
@@ -23,7 +23,7 @@
                 ],
                 "m2": [
                     -90.0,
-                    90.0
+                    95.0
                 ],
                 "m3": [
                     0.0,
@@ -41,14 +41,22 @@
                 "max_speed_hz": 2400,
                 "accel_hz_s": 2500
             },
-            "zero_calibrated": true
+            "zero_calibrated": true,
+            "backlash_turns": {
+                "m1_cw": 0.0,
+                "m1_ccw": 0.0,
+                "m2_cw": 0.0,
+                "m2_ccw": 0.0,
+                "m3_cw": 0.0,
+                "m3_ccw": 0.0
+            }
         },
         "Robot Prototipo Compacto (Laboratorio)": {
             "name": "Robot Prototipo Compacto (Laboratorio)",
             "description": "Perfil de prueba con eslabones cortos y velocidad reducida para máxima seguridad",
             "date": "2026-10-30",
             "geometry": {
-                "d1": 8.0,
+                "d1": 18.0,
                 "a1": 9.0,
                 "a2": 25.0,
                 "a3": 25.0
@@ -65,7 +73,7 @@
                 ],
                 "m2": [
                     -90.0,
-                    90.0
+                    95.0
                 ],
                 "m3": [
                     0.0,
@@ -83,14 +91,22 @@
                 "max_speed_hz": 1200,
                 "accel_hz_s": 1500
             },
-            "zero_calibrated": true
+            "zero_calibrated": true,
+            "backlash_turns": {
+                "m1_cw": 0.0,
+                "m1_ccw": 0.0,
+                "m2_cw": 0.0,
+                "m2_ccw": 0.0,
+                "m3_cw": 0.0,
+                "m3_ccw": 0.0
+            }
         },
         "Mi Robot Gato MK2": {
             "name": "Mi Robot Gato MK2",
             "description": "Perfil establecido: Base sobre caja, tablero en mesa Z=-29.1cm",
             "date": "2026-10-30",
             "geometry": {
-                "d1": 10.0,
+                "d1": 18.0,
                 "a1": 11.0,
                 "a2": 32.922,
                 "a3": 32.934
@@ -111,7 +127,7 @@
                 ],
                 "m3": [
                     0.0,
-                    85.0
+                    90.0
                 ]
             },
             "tool": {
@@ -125,14 +141,23 @@
                 "max_speed_hz": 2400,
                 "accel_hz_s": 2500
             },
-            "zero_calibrated": true
+            "zero_calibrated": true,
+            "backlash_turns": {
+                "m1_cw": 5.0,
+                "m1_ccw": 5.0,
+                "m2_cw": 1.0,
+                "m2_ccw": 2.0,
+                "m3_cw": 3.0,
+                "m3_ccw": 4.0
+            },
+            "backlash_enabled": true
         },
         "PRUEBA 2": {
             "name": "PRUEBA 2",
             "description": "Perfil configurado desde el Asistente de Inicio",
             "date": "2026-10-30",
             "geometry": {
-                "d1": 10.0,
+                "d1": 18.0,
                 "a1": 11.0,
                 "a2": 32.922,
                 "a3": 32.934
@@ -149,7 +174,7 @@
                 ],
                 "m2": [
                     -90.0,
-                    90.0
+                    95.0
                 ],
                 "m3": [
                     0.0,
@@ -167,14 +192,22 @@
                 "max_speed_hz": 2400,
                 "accel_hz_s": 2500
             },
-            "zero_calibrated": true
+            "zero_calibrated": true,
+            "backlash_turns": {
+                "m1_cw": 0.0,
+                "m1_ccw": 0.0,
+                "m2_cw": 0.0,
+                "m2_ccw": 0.0,
+                "m3_cw": 0.0,
+                "m3_ccw": 0.0
+            }
         },
         "Prueba 3": {
             "name": "Prueba 3",
             "description": "Perfil configurado desde el Asistente de Inicio",
             "date": "2026-10-30",
             "geometry": {
-                "d1": 10.0,
+                "d1": 18.0,
                 "a1": 11.0,
                 "a2": 22.0,
                 "a3": 22.0
@@ -191,7 +224,7 @@
                 ],
                 "m2": [
                     -90.0,
-                    90.0
+                    95.0
                 ],
                 "m3": [
                     0.0,
@@ -209,14 +242,22 @@
                 "max_speed_hz": 2400,
                 "accel_hz_s": 2500
             },
-            "zero_calibrated": true
+            "zero_calibrated": true,
+            "backlash_turns": {
+                "m1_cw": 0.0,
+                "m1_ccw": 0.0,
+                "m2_cw": 0.0,
+                "m2_ccw": 0.0,
+                "m3_cw": 0.0,
+                "m3_ccw": 0.0
+            }
         },
         "anaya bot": {
             "name": "anaya bot",
             "description": "Perfil configurado desde el Asistente de Inicio",
             "date": "2026-10-30",
             "geometry": {
-                "d1": 10.0,
+                "d1": 18.0,
                 "a1": 11.0,
                 "a2": 32.922,
                 "a3": 32.934
@@ -233,7 +274,7 @@
                 ],
                 "m2": [
                     -90.0,
-                    90.0
+                    95.0
                 ],
                 "m3": [
                     0.0,
@@ -251,7 +292,15 @@
                 "max_speed_hz": 2400,
                 "accel_hz_s": 2500
             },
-            "zero_calibrated": true
+            "zero_calibrated": true,
+            "backlash_turns": {
+                "m1_cw": 0.0,
+                "m1_ccw": 0.0,
+                "m2_cw": 0.0,
+                "m2_ccw": 0.0,
+                "m3_cw": 0.0,
+                "m3_ccw": 0.0
+            }
         }
     }
 }

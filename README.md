@@ -132,8 +132,15 @@ Para asegurar tolerancia ante caídas de tensión transitorias en cables USB lar
 
 ## 🧮 Modelado Cinemático y Cinemática Inversa
 
-El robot posee configuración antropomórfica RRR desacoplada:
+El robot posee configuración antropomórfica RRR desacoplada con mecanismo de paralelogramo:
 
+### Geometría y Parámetros Dimensionales (Medidas Reales SolidWorks y Mesa):
+* **Elevación vertical de la Base al Hombro ($d_1$):** $18.0\text{ cm}$ *(Base montada sobre mesa/caja)*.
+* **Offset radial del Hombro ($a_1$):** $11.0\text{ cm}$.
+* **Longitud del Eslabón 2 - Brazo ($a_2$):** $32.922\text{ cm}$.
+* **Longitud del Eslabón 3 - Antebrazo con efector ($a_3$):** $32.934\text{ cm}$.
+
+### Ecuaciones Cinemáticas:
 1. **Ángulo de Base ($q_1$):**
    $$q_1 = \text{atan2}(Y, X)$$
 
@@ -148,30 +155,54 @@ El robot posee configuración antropomórfica RRR desacoplada:
 4. **Ángulo de Hombro ($q_2$):**
    $$q_2 = \text{atan2}(z_e, r) - \text{atan2}(a_3 \sin(q_3), a_2 + a_3 \cos(q_3))$$
 
+### Límites Articulares y Protección Mecánica:
+* **M1 (Base / Yaw):** $[-180.0^\circ, +180.0^\circ]$ *(Giro continuo 360°)*.
+* **M2 (Hombro / Pitch):** $[-90.0^\circ, +95.0^\circ]$ *(Rango extendido para alcance frontal)*.
+* **M3 (Codo / Pitch):** $[0.0^\circ, +85.0^\circ]$ *(Protección activa anticolisión para evitar que la tuerca/varilla de empuje choque contra las carcasas de los reductores cicloidales)*.
+
 ---
 
-## 🗂️ Estructura del Repositorio
+## ⚙️ Compensación de Holgura Mecánica (Backlash)
+
+Debido al juego mecánico inherente en los reductores cicloidales 31:1 y acoplamientos, el sistema integra un módulo de compensación activa de holgura por inversión de sentido en `gui_robot_gato.py`:
+* **Principio de Funcionamiento:** Cada vez que una articulación cambia de dirección de giro (sentido horario CW $\leftrightarrow$ antihorario CCW), el software inyecta automáticamente un número configurable de microvueltas adicionales en el motor paso a paso NEMA 17 para absorber la zona muerta antes de transmitir el torque al eslabón.
+* **Valores Calibrados en `robot_config.json`:**
+  * **M1 (Base):** CW = 5.0 vueltas, CCW = 5.0 vueltas.
+  * **M2 (Hombro):** CW = 1.0 vueltas, CCW = 2.0 vueltas.
+  * **M3 (Codo):** CW = 3.0 vueltas, CCW = 4.0 vueltas.
+* **Activación Dinámica:** Cuenta con un interruptor interactivo en la interfaz para activar o desactivar la compensación en tiempo real.
+
+---
+
+## 🗂️ Estructura del Repositorio y Módulos GUI
+
+El proyecto dentro del directorio `PROGRAMACIÓN` se organiza en 4 módulos independientes:
 
 ```
-robot_3gdl/
-├── main/
-│   ├── main.c                          # Firmware completo en C (ESP-IDF v6.1)
-│   └── CMakeLists.txt                  # Configuración de compilación del componente main
-├── CMakeLists.txt                      # CMakeLists principal del proyecto ESP-IDF
-├── sdkconfig                           # Configuración de periféricos y reloj ESP32-S3
-├── gui_robot_gato.py                   # Software de Interfaz Gráfica (Python / Tkinter / OpenCV)
-├── calibrador_casillas.py              # Calibrador Teach-In 1:1 y Ajuste de Cinemática Inversa
-├── test_encoders.py                    # Diagnóstico interactivo de encoders AS5600
-├── Plantilla_Gato_Escala_1a1.pdf       # Plantilla técnica imprimible a escala exacta 1:1
-├── Manual_Robot_3GDL_Gato.pdf          # Manual técnico imprimible de 5 páginas
-├── casillas_calibradas.json            # Coordenadas y ángulos físicos aprendidos del tablero
-├── robot_config.json                   # Perfiles mecánicos, cinemáticos y calibración del cero
-├── robot_marcado_m1_m2_m3.jpg          # Fotografía de referencia con la identificación de motores
-├── requirements.txt                    # Dependencias de librerías de Python
-├── instalar_dependencias.bat           # Instalador automático en 1 clic
-├── iniciar_interfaz.bat                # Lanzador de la aplicación en 1 clic
-├── flashear_firmware_esp32.bat         # Flasheo directo al ESP32 en 1 clic
-└── README.md                           # Documentación técnica completa
+PROGRAMACIÓN/
+├── CONTROL/                            # 🚀 VERSIÓN PRINCIPAL (Lazo Cerrado + Nueva Dinámica)
+│   ├── main/
+│   │   ├── main.c                      # Firmware C ESP-IDF v6.1 (Anti-glitch + Paro coordinado)
+│   │   └── CMakeLists.txt              # Configuración de compilación componente main
+│   ├── CMakeLists.txt                  # Proyecto ESP-IDF principal
+│   ├── sdkconfig                       # Configuración de periféricos y reloj ESP32-S3
+│   ├── gui_robot_gato.py               # GUI principal (d1=18cm, Backlash, Visión WebCam)
+│   ├── calibrador_casillas.py          # Calibrador Teach-In 1:1 sincronizado
+│   ├── test_encoders.py                # Diagnóstico de encoders AS5600
+│   ├── robot_config.json               # Perfiles con Backlash y límites seguros
+│   ├── casillas_calibradas.json        # Coordenadas físicas aprendidas
+│   ├── iniciar_interfaz.bat            # Lanzador rápido de la interfaz de control
+│   ├── iniciar_interfaz_control.bat    # Lanzador alternativo con nombre explícito
+│   ├── calibrar_casillas.bat           # Lanzador del calibrador 1:1
+│   ├── test_encoders.bat               # Lanzador del test de encoders
+│   ├── flashear_firmware_esp32.bat     # Flasheo directo de firmware C al ESP32-S3
+│   ├── instalar_dependencias.bat       # Instalador de librerías Python
+│   ├── Manual_Robot_3GDL_Gato.pdf      # Manual técnico imprimible de 5 páginas
+│   ├── Plantilla_Gato_Escala_1a1.pdf   # Plantilla técnica para calibración 1:1
+│   └── README.md                       # Documentación técnica completa
+├── gui alternativo/                    # 🔄 Versión con dinámica/DH previa y GUI modificada
+├── gui_de_mov_C/                       # 👁️ Versión Lazo Abierto / A Ciegas (conteo de micropasos)
+└── gui_version_antigua/                # 🏛️ Versión Clásica Original de referencia
 ```
 
 ---
@@ -203,8 +234,8 @@ Para garantizar que el efector final caiga exactamente en el centro de cada casi
 * **Estudiante:** Juan Jesus
 * **Correo Institucional:** `up230061@alumnos.upa.edu.mx`
 * **Institución:** Universidad Politécnica de Aguascalientes (UPA)
-* **Fecha de Última Actualización:** 02 de Noviembre de 2026 (01:15 hrs)
-* **Estado del Proyecto:** Operacional al 100% (Firmware en C + GUI Python + Calibrador 1:1 + Manual PDF + Guía de Troubleshooting)
+* **Fecha de Última Actualización:** 10 de Noviembre de 2026
+* **Estado del Proyecto:** Operacional al 100% (Estructura Modular, Lazo Cerrado con Backlash, Tolerancia I2C, Paro Coordinado y 4 GUIs independientes)
 
 ---
 
@@ -212,6 +243,7 @@ Para garantizar que el efector final caiga exactamente en el centro de cada casi
 
 | Versión / Fecha | Componentes Actualizados | Descripción de Cambios y Mejoras |
 |---|---|---|
+| **v1.4**<br>*(10/11/2026)* | `README.md`<br>`CONTROL/`<br>`gui_robot_gato.py`<br>`main/main.c`<br>`robot_config.json`<br>`calibrador_casillas.py` | • **Reorganización Integral del Espacio de Trabajo:** Limpieza completa de la raíz de `PROGRAMACIÓN` estructurando todo en 4 módulos independientes (`CONTROL/`, `gui alternativo/`, `gui_de_mov_C/`, `gui_version_antigua/`) sin archivos dispersos afuera.<br>• **Corrección Dimensional Real ($d_1 = 18.0\text{ cm}$):** Corrección de la cota vertical base-hombro a 18.0 cm para reflejar la altura física real sobre la mesa, recalculando el modelo cinemático directo e inverso en `gui_robot_gato.py` y `calibrador_casillas.py`.<br>• **Compensación Activa de Holgura (Backlash):** Algoritmo de vueltas extras automáticas en motores NEMA 17 para absorber el juego de los reductores 31:1 al invertir sentido (CW/CCW), calibrado en `robot_config.json` con control interactivo.<br>• **Seguridad Anticolisión de Tuerca M3:** Rango de M3 acotado a $[0.0^\circ, +85.0^\circ]$ con margen de seguridad para evitar colisión de la tuerca y varilla con la carcasa del reductor, y ampliación de M2 hasta $+95.0^\circ$.<br>• **Firmware ESP32-S3 Anti-Glitch y Paro Coordinado:** Filtro I2C con tolerancia a micro-interrupciones de hasta 10 ciclos (0.20 s @ 50 Hz), protocolo anti-choque ampliado a 2500 ms con paro de emergencia simultáneo de los 3 motores y modo libre seguro.<br>• **Sincronización del Proyecto `robot_3gdl`:** Actualización total de los archivos del repositorio central con los últimos módulos de firmware, GUI y calibración. |
 | **v1.3**<br>*(02/11/2026)* | `README.md`<br>`main/main.c`<br>`sdkconfig`<br>`gui_robot_gato.py` | • **Diagnóstico Eléctrico y Troubleshooting:** Documentación técnica completa sobre el colapso del riel de 3.3V a 2.5V por falso contacto/corto en cables móviles del Encoder 3 (M3 Codo), lógica Active-Low de drivers TB6600 y alivio de tensión con silicón caliente.<br>• **Desactivación de Brownout Detector:** Se eliminó el reinicio por hardware de la ESP32 ante caídas de tensión en cables USB largos o protoboard (`RTC_CNTL_BROWN_OUT_REG = 0`).<br>• **Arranque Seguro con Torque Firme:** Los drivers TB6600 ahora inician energizados por defecto (`ENA = 0`, `g_motor_enabled = true`) en la postura física actual sin saltos ni tics.<br>• **Ajuste del Protocolo Anti-Choque:** Se amplió la ventana a 1.2 segundos y umbral a 0.12° para evitar falsos positivos durante la rampa de arranque del reductor 31:1. |
 | **v1.2**<br>*(31/10/2026)* | `calibrador_casillas.py`<br>`Plantilla_Gato_Escala_1a1.pdf`<br>`casillas_calibradas.json` | • **Plantilla Vectorial 1:1 en PDF:** Tablero técnico imprimible con regla física de 100 mm y dianas para las 9 casillas.<br>• **Calibrador Teach-In 1:1:** Aplicación gráfica dedicada para mover el brazo a mano y guardar los ángulos directos de los 3 encoders AS5600.<br>• **Ajuste Analítico de Cinemática Inversa:** Cálculo de centroide $(X_c, Y_c)$, plano de mesa $Z_{mesa}$ y reporte de errores residuales con 0% de error físico. |
 | **v1.1**<br>*(30/10/2026)* | `gui_robot_gato.py`<br>`Manual_Robot_3GDL_Gato.pdf`<br>`robot_config.json` | • **Interfaz Gráfica Clásica:** Panel de control de ingeniería, monitores articulares en tiempo real, simulación 3D interactiva y visión WebCam.<br>• **Filtro Anti-Tics en M3:** Implementación de filtro pasa-bajas EMA e histéresis de banda muerta ampliada para compensar holgura mecánica del codo.<br>• **Manual Técnico en PDF:** Documento de 5 páginas con diagramas esquemáticos, tablas de pines y modelo matemático DH. |

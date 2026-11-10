@@ -209,10 +209,10 @@ static float g_accel_hz_per_sec = 2600.0f;
 // Límites angulares de seguridad configurables (salida del reductor en grados)
 // Límites del robot:
 // M1 (Base):   [-180.0°, +180.0°] (Giro completo 360°)
-// M2 (Hombro): [-90.0°,  +90.0°]
-// M3 (Codo):   [-90.0°,  +90.0°]
+// M2 (Hombro): [-90.0°,  +95.0°]
+// M3 (Codo):   [-90.0°, +100.0°]
 static float g_limit_min_deg[NUM_MOTORS] = {-180.0f, -90.0f, -90.0f};
-static float g_limit_max_deg[NUM_MOTORS] = {180.0f, 90.0f, 90.0f};
+static float g_limit_max_deg[NUM_MOTORS] = {180.0f, 95.0f, 100.0f};
 
 // Telemetría y Estado Compartido
 static as5600_reading_t g_last_reading[NUM_MOTORS] = {0};
@@ -503,12 +503,13 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
       sda = g_encoder_buses[motor_idx].sda_io;
       scl = g_encoder_buses[motor_idx].scl_io;
     } else {
-      // Rechazo de glitch transitorio I2C
+      // Rechazo de glitch transitorio I2C (tolera micro-incomunicaciones de hasta 0.20s = 10 ciclos @ 50Hz)
       s_consecutive_errs[motor_idx]++;
-      if (s_consecutive_errs[motor_idx] <= 5 && s_last_valid[motor_idx].valid) {
+      if (s_consecutive_errs[motor_idx] <= 10 && s_last_valid[motor_idx].valid) {
         *out = s_last_valid[motor_idx];
         return ESP_OK;
       }
+      *out = s_last_valid[motor_idx];
       out->valid = false;
       return err;
     }
@@ -523,10 +524,11 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
   err = as5600_read_u16_bus(sda, scl, AS5600_REG_RAW_ANGLE, &raw);
   if (err != ESP_OK) {
     s_consecutive_errs[motor_idx]++;
-    if (s_consecutive_errs[motor_idx] <= 5 && s_last_valid[motor_idx].valid) {
+    if (s_consecutive_errs[motor_idx] <= 10 && s_last_valid[motor_idx].valid) {
       *out = s_last_valid[motor_idx];
       return ESP_OK;
     }
+    *out = s_last_valid[motor_idx];
     out->valid = false;
     return err;
   }
@@ -998,29 +1000,35 @@ static void steppers_control_task(void *pvParameters) {
 
           // -------------------------------------------------------------
           // PROTOCOLO ANTI-CHOQUE / DETECCIÓN DE ATASCO POR ENCODER AS5600:
-          // Si el motor genera pulsos (velocidad >= 120 Hz) durante 1.2 segundos
+          // Si el motor genera pulsos (velocidad >= 120 Hz) durante 2.5 segundos
           // pero el encoder NO se desplaza al menos 0.12° (en salida 31:1), se detecta atasco o choque.
+          // Al activarse, detiene de inmediato TODOS los motores y sincroniza objetivos.
           // -------------------------------------------------------------
           if (current_running_speed[i] >= 120.0f) {
             s_stall_timer_ms[i] += 20; // 50 Hz -> 20 ms
-            if (s_stall_timer_ms[i] >= 1200) {
+            if (s_stall_timer_ms[i] >= 2500) {
               float delta_move = fabsf(r.calibrated_deg - s_stall_ref_deg[i]);
               if (delta_move < 0.12f) {
-                // ¡COLISIÓN O ATASCO DETECTADO! Frenado de emergencia inmediato
-                s_motor_stalled[i] = true;
-                stepper_set_hw_speed(i, 0, current_dir[i]);
-                current_running_speed[i] = 0.0f;
-                g_integral_err[i] = 0.0f;
-                s_in_position[i] = true;
-                if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
-                  g_target_deg[i] = r.calibrated_deg; // Fijar objetivo en posición actual
-                  g_current_speed_hz[i] = 0;
-                  g_motor_state[i] = MOTOR_STATE_IN_POSITION;
+                // ¡COLISIÓN O ATASCO DETECTADO! Frenado de emergencia inmediato de TODOS los motores
+                for (int m = 0; m < NUM_MOTORS; m++) {
+                  s_motor_stalled[m] = true;
+                  stepper_set_hw_speed(m, 0, current_dir[m]);
+                  current_running_speed[m] = 0.0f;
+                  g_integral_err[m] = 0.0f;
+                  s_in_position[m] = true;
+                  s_stall_timer_ms[m] = 0;
+                }
+                if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+                  for (int m = 0; m < NUM_MOTORS; m++) {
+                    g_target_deg[m] = g_last_reading[m].calibrated_deg;
+                    g_current_speed_hz[m] = 0;
+                    g_motor_state[m] = MOTOR_STATE_IN_POSITION;
+                  }
                   xSemaphoreGive(g_data_mutex);
                 }
                 // Emisión de alarma crítica por UART
                 printf("$ALARM,STALL,M%d,%.2f,%.2f*00\r\n", i + 1, target, r.calibrated_deg);
-                ESP_LOGE(TAG, "ALERTA ANTI-CHOQUE: Motor M%d bloqueado! Sin movimiento de encoder (Obj=%.2f, Actual=%.2f)",
+                ESP_LOGE(TAG, "ALERTA ANTI-CHOQUE: Motor M%d bloqueado! Sin movimiento de encoder (Obj=%.2f, Actual=%.2f). Paro general de los 3 motores ejecutado.",
                          i + 1, target, r.calibrated_deg);
               } else {
                 s_stall_ref_deg[i] = r.calibrated_deg;
@@ -1080,16 +1088,20 @@ static void steppers_control_task(void *pvParameters) {
         stepper_set_hw_speed(i, 0, current_dir[i]);
         current_running_speed[i] = 0.0f;
         g_integral_err[i] = 0.0f;
-        s_prev_meas_deg[i] = r.calibrated_deg;
-        s_stall_ref_deg[i] = r.calibrated_deg;
+        if (r.valid) {
+          s_prev_meas_deg[i] = r.calibrated_deg;
+          s_stall_ref_deg[i] = r.calibrated_deg;
+        }
         s_stall_timer_ms[i] = 0;
         s_motor_stalled[i] = false;
         if (!enabled) {
           // En MOTORES LIBRES: el objetivo persigue a la articulación en tiempo real
           // para que cuando el usuario active o bloquee, el error sea 0.0° sin saltos ni tics
-          if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
-            g_target_deg[i] = r.calibrated_deg;
-            xSemaphoreGive(g_data_mutex);
+          if (r.valid) {
+            if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+              g_target_deg[i] = r.calibrated_deg;
+              xSemaphoreGive(g_data_mutex);
+            }
           }
           stepper_set_enable(i, false);
         }

@@ -58,12 +58,12 @@ COLOR_RED_BG = "#fee2e2"
 # 1. MOTOR CINEMÁTICO (DIRECTA, INVERSA Y AJUSTE DE PLANO)
 # ==============================================================================
 class KinematicsEngine:
-    def __init__(self, d1=10.0, a1=11.0, a2=22.0, a3=22.0):
-        self.d1 = float(d1)  # Altura base (cm)
+    def __init__(self, d1=18.0, a1=11.0, a2=32.922, a3=32.934):
+        self.d1 = float(d1)  # Altura base (cm) - Base a 18 cm sobre mesa
         self.a1 = float(a1)  # Offset horizontal hombro (cm)
         self.a2 = float(a2)  # Longitud brazo principal (cm)
         self.a3 = float(a3)  # Longitud antebrazo (cm)
-        self.limits = [(-180.0, 180.0), (-90.0, 90.0), (-90.0, 90.0)]
+        self.limits = [(-180.0, 180.0), (-90.0, 95.0), (-60.0, 100.0)]
 
     def forward_kinematics(self, q1_deg, q2_deg, q3_deg):
         """Calcula (X, Y, Z) en cm dado (q1, q2, q3) en grados bajo cinemática de paralelogramo."""

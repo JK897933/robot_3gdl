@@ -139,7 +139,7 @@ class RobotMK2Kinematics:
     MODELO CINEMÁTICO COMPLETO DEL ROBOT ANTROPOMÓRFICO MK2 (RRR):
     ============================================================================
     Geometría dimensional del manipulador (medidas exactas de SolidWorks):
-      - Eslabón 1 (Base rotatoria J1):  d1 = 10.0 cm  (Elevación vertical)
+      - Eslabón 1 (Base rotatoria J1):  d1 = 18.0 cm  (Elevación vertical Base sobre mesa)
                                         a1 = 11.0 cm  (Offset horizontal del hombro)
       - Eslabón 2 (Hombro J2):          a2 = 32.922 cm (Longitud del brazo superior)
       - Eslabón 3 (Codo J3):            a3 = 32.934 cm (Longitud del antebrazo con efector)
@@ -157,11 +157,11 @@ class RobotMK2Kinematics:
     """
 
     def __init__(self):
-        # Dimensiones en centímetros para cinemática cartesiana
-        self.d1 = 10.0      # cm: Altura del eje de la base al eje del hombro
+        # Dimensiones en centímetros para cinemática cartesiana (Origen Z=0 en la base/mesa)
+        self.d1 = 18.0      # cm: Altura del eje de la base al eje del hombro (Base elevada 18 cm)
         self.a1 = 11.0      # cm: Desplazamiento horizontal desde el centro de giro
         self.a2 = 32.922    # cm: Eslabón 2 (Brazo - 329.22 mm)
-        self.a3 = 32.934    # cm: Eslabón 3 (Antebrazo - 329.34 mm)
+        self.a3 = 32.934    # cm: Eslabón 3 (Antebrazo con efector - 329.34 mm)
 
         # Dimensiones en metros y masas para cálculo dinámico de Lagrange
         self.d1_m = self.d1 / 100.0
@@ -175,13 +175,13 @@ class RobotMK2Kinematics:
 
         # Rango admisible de movimiento angular seguro (grados - Reductor 31:1)
         # Límites del robot:
-        # M1 (Base):   [-180.0°, +180.0°] (Giro libre completo 360°)
-        # M2 (Hombro): [-90.0°,  +90.0°]
-        # M3 (Codo):   [-90.0°,  +90.0°]
+        # M1 (Base):   [-180.0°, +180.0°] (Giro completo 360°)
+        # M2 (Hombro): [-90.0°,  +95.0°]
+        # M3 (Codo):   [  0.0°,  +85.0°] Protege contra choque de tuerca/varilla en los reductores
         self.limits = [
             (-180.0, 180.0), # J1 (Base - Yaw): Giro completo 360° [-180°, +180°]
-            (-90.0, 90.0),   # J2 (Hombro - Pitch): [-90°, +90°]
-            (0.0, 85.0)      # J3 (Codo - Pitch): [0.0°, 85.0°] Protege contra choque de tuerca en reductores
+            (-90.0, 95.0),   # J2 (Hombro - Pitch): [-90°, +95°]
+            (0.0, 85.0)      # J3 (Codo - Pitch): [0°, +85°] Protege contra choque de tuerca en reductores
         ]
         self.nut_collision_margin_deg = 2.0  # Margen de alerta temprana de colisión
 
@@ -264,7 +264,7 @@ class RobotMK2Kinematics:
                        |      /
                        |=====O (P0: Base giratoria, ángulo q1)
                        |     |
-                       |     | d1      (Altura vertical base = 10.0 cm)
+                       |     | d1      (Altura vertical base = 18.0 cm)
                        |     |
                        +-----+--------------------------> R (Plano radial)
                       (0,0,0)
@@ -464,6 +464,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             {"connected": False, "magnet": False, "raw": 0, "msg": "Esperando..."}
             for _ in range(3)
         ]
+        self.last_encoder_valid_time = [time.time(), time.time(), time.time()]
         self.encoder_badge_labels = []
         self.encoder_raw_labels = []
 
@@ -477,13 +478,26 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.zero_calibrated = True
         self.motors_free_state = False
 
-        # Sistema de Coordenadas: Relativo a Cero Home (0.0, 0.0, 0.0)
-        # Inicia exactamente en (0.0, 0.0, 0.0) referenciado al actuador físico
-        self.coord_mode_relative = True
-        self.cart_x = 0.0
+        # Sistema de Coordenadas: Origen (0,0,0) absoluto en el centro de la base
+        # X: Adelante (+) / Atrás (-)
+        # Y: Izquierda (+) / Derecha (-)
+        # Z: Arriba (+) / Abajo (-) con Base a Z=0, Hombro a Z=18.0cm
+        self.coord_mode_relative = False
+        self.cart_x = 45.0
         self.cart_y = 0.0
-        self.cart_z = 0.0
+        self.cart_z = 15.0
         self.last_ik_error_pos = 0.0
+
+        # Compensación de Holgura / Juego Mecánico (Backlash en vueltas extras motor NEMA 17)
+        self.backlash_active = False
+        self.var_backlash_enable = tk.BooleanVar(value=False)
+        self.backlash_turns = {
+            "m1_cw": 0.0, "m1_ccw": 0.0,
+            "m2_cw": 0.0, "m2_ccw": 0.0,
+            "m3_cw": 0.0, "m3_ccw": 0.0
+        }
+        self.last_nominal_target = [0.0, 0.0, 0.0]
+        self.last_backlash_offset = [0.0, 0.0, 0.0]
 
         # Disposición espacial de las 9 casillas del tablero de Gato y Dispensador
         # Calculadas automáticamente en la zona segura libre de colisión de tuerca M2-M3
@@ -564,20 +578,68 @@ class Robot3GDLGatoVisionController(tk.Tk):
         return cs
 
     def send_angles_command(self, q1, q2, q3):
-        """Transmite una consigna articular al firmware del ESP32 con protocolo $PKT."""
+        """
+        Transmite una consigna articular al firmware del ESP32 con protocolo $PKT.
+        Aplica compensación de juego mecánico (backlash de reductores cicloidales 31:1):
+        Agrega vueltas extras de motor en sentido horario o antihorario según la dirección del movimiento.
+        """
         if getattr(self, 'motors_free_state', False):
             # En modo MOTORES LIBRES, NUNCA transmitir consignas que reactiven torque o causen tics
             return
+
+        nominal = [float(q1), float(q2), float(q3)]
+        compensated = [nominal[0], nominal[1], nominal[2]]
+
+        if not hasattr(self, 'last_nominal_target'):
+            self.last_nominal_target = [0.0, 0.0, 0.0]
+        if not hasattr(self, 'last_backlash_offset'):
+            self.last_backlash_offset = [0.0, 0.0, 0.0]
+
+        is_active = getattr(self, 'backlash_active', False)
+        if not is_active and hasattr(self, 'var_backlash_enable'):
+            is_active = bool(self.var_backlash_enable.get())
+
+        if is_active:
+            ratio = 31.0
+            deg_per_turn = 360.0 / ratio  # ~11.6129° de reductor por vuelta de motor NEMA 17
+
+            b_turns = getattr(self, 'backlash_turns', {
+                "m1_cw": 0.0, "m1_ccw": 0.0,
+                "m2_cw": 0.0, "m2_ccw": 0.0,
+                "m3_cw": 0.0, "m3_ccw": 0.0,
+            })
+
+            for i in range(3):
+                delta = nominal[i] - self.last_nominal_target[i]
+                if delta > 0.15:  # Giro en sentido Horario (CW / +)
+                    turns = float(b_turns.get(f"m{i+1}_cw", 0.0))
+                    offset = turns * deg_per_turn
+                    self.last_backlash_offset[i] = offset
+                elif delta < -0.15:  # Giro en sentido Antihorario (CCW / -)
+                    turns = float(b_turns.get(f"m{i+1}_ccw", 0.0))
+                    offset = -turns * deg_per_turn
+                    self.last_backlash_offset[i] = offset
+                else:
+                    offset = self.last_backlash_offset[i]
+
+                compensated[i] = nominal[i] + offset
+                self.last_nominal_target[i] = nominal[i]
+        else:
+            self.last_nominal_target = list(nominal)
+            self.last_backlash_offset = [0.0, 0.0, 0.0]
+
         # REGLA DE OPERACIÓN (LÍMITES CONFIGURADOS):
         l1_min, l1_max = self.kin.limits[0]
         l2_min, l2_max = self.kin.limits[1]
         l3_min, l3_max = self.kin.limits[2]
-        q1 = max(l1_min, min(l1_max, float(q1)))
-        q2 = max(l2_min, min(l2_max, float(q2)))
-        q3 = max(l3_min, min(l3_max, float(q3)))
-        cmd_q1 = float(q1)
-        cmd_q2 = float(q2)
-        cmd_q3 = float(q3)
+
+        m1 = abs(self.last_backlash_offset[0]) + 1.0 if is_active else 0.0
+        m2 = abs(self.last_backlash_offset[1]) + 1.0 if is_active else 0.0
+        m3 = abs(self.last_backlash_offset[2]) + 1.0 if is_active else 0.0
+
+        cmd_q1 = max(max(-180.0, l1_min - m1), min(min(180.0, l1_max + m1), float(compensated[0])))
+        cmd_q2 = max(max(-90.0,  l2_min - m2), min(min(90.0,  l2_max + m2), float(compensated[1])))
+        cmd_q3 = max(max(-90.0,  l3_min - m3), min(min(90.0,  l3_max + m3), float(compensated[2])))
         self.pkt_seq = (self.pkt_seq + 1) % 10000
         payload = f"PKT,{self.pkt_seq},0,ANGLES,{cmd_q1:.2f},{cmd_q2:.2f},{cmd_q3:.2f}"
         cs = self.calculate_checksum(payload)
@@ -760,11 +822,21 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
                             # Trama de telemetría de Encoders: $ENC,1,<valid>,<md>,<raw>,2,...
                             if parts[0] == "ENC" and len(parts) >= 13:
+                                now_enc = time.time()
                                 for m_idx in range(3):
                                     offset = 1 + m_idx * 4
-                                    self.encoder_status[m_idx]["connected"] = (parts[offset + 1] == "1")
-                                    self.encoder_status[m_idx]["magnet"]    = (parts[offset + 2] == "1")
-                                    self.encoder_status[m_idx]["raw"]       = int(parts[offset + 3])
+                                    is_val = (parts[offset + 1] == "1")
+                                    if is_val:
+                                        self.last_encoder_valid_time[m_idx] = now_enc
+                                        self.encoder_status[m_idx]["connected"] = True
+                                        self.encoder_status[m_idx]["magnet"]    = (parts[offset + 2] == "1")
+                                        self.encoder_status[m_idx]["raw"]       = int(parts[offset + 3])
+                                    else:
+                                        # Tolerar micro-incomunicaciones: solo alarmar si no hay respuesta tras >= 0.20 segundos
+                                        if (now_enc - self.last_encoder_valid_time[m_idx]) >= 0.20:
+                                            self.encoder_status[m_idx]["connected"] = False
+                                            self.encoder_status[m_idx]["magnet"]    = (parts[offset + 2] == "1")
+                                            self.encoder_status[m_idx]["raw"]       = int(parts[offset + 3])
                                 continue
 
                             # Trama individual de Encoder: $TEL,<ID>,<CALIB_DEG>,<RAW>,<SPEED_HZ>,<ERROR>,<STATE>,<AGC>,<MAG_STAT>
@@ -775,6 +847,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                     self.current_angles[m_idx] = raw_deg
                                     self.encoder_status[m_idx]["raw"] = int(parts[3])
                                     self.speeds_hz[m_idx] = int(parts[4])
+                                    self.last_encoder_valid_time[m_idx] = time.time()
                                     self.encoder_status[m_idx]["connected"] = True
                                     if len(parts) > 8:
                                         self.encoder_status[m_idx]["magnet"] = (parts[8] == "1")
@@ -1653,19 +1726,20 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 lmin = min(v1, v2)
                 lmax = max(v1, v2)
 
-                # Regla de rangos admisibles:
-                # M1: [-180.0, 180.0] (La base puede girar hasta 360° si el usuario lo requiere)
-                # M2: [-60.0, 60.0]
-                # M3: [  0.0, 85.0] (Amplitud completa para alcanzar casillas y bajar a mesa)
+                # Regla de rangos admisibles de seguridad:
+                # M1: [-180.0°, +180.0°] (Giro libre completo 360°)
+                # M2: [-90.0°,  +105.0°] (Hombro)
+                # M3: [-90.0°,  +110.0°] (Codo y antebrazo)
                 if i == 0:
                     lmin = max(-180.0, lmin)
                     lmax = min(180.0, lmax)
                 elif i == 1:
-                    lmin = max(-60.0, lmin)
-                    lmax = min(60.0, lmax)
+                    lmin = max(-90.0, lmin)
+                    lmax = min(105.0, lmax)
                 elif i == 2:
+                    # M3 (Codo): Min >= 0.0° para proteger contra choque de tuerca en reductores
                     lmin = max(0.0, lmin)
-                    lmax = min(90.0, lmax)
+                    lmax = min(95.0, lmax)
 
                 # Sincronizar las cajas de texto en pantalla con el orden correcto
                 self.ent_lim_min[i].delete(0, tk.END)
@@ -1747,6 +1821,78 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 f"  • M3 (Codo):   [{new_limits[2][0]:.1f}°, {new_limits[2][1]:.1f}°]\n\n"
                 f"Manipulador y firmware 100% protegidos contra sobre-carrera."
             )
+
+    def _update_backlash_button_ui(self):
+        """Actualiza la apariencia visual del botón manual y del indicador de estado."""
+        is_active = getattr(self, 'backlash_active', False)
+        if hasattr(self, 'btn_toggle_backlash'):
+            if is_active:
+                self.btn_toggle_backlash.config(
+                    text="● COMPENSACIÓN ACTIVADA",
+                    bg="#16a34a",
+                    fg="#ffffff",
+                    activebackground="#15803d",
+                    activeforeground="#ffffff",
+                    relief=tk.SUNKEN
+                )
+            else:
+                self.btn_toggle_backlash.config(
+                    text="○ ACTIVAR COMPENSACIÓN",
+                    bg="#475569",
+                    fg="#ffffff",
+                    activebackground="#334155",
+                    activeforeground="#ffffff",
+                    relief=tk.RAISED
+                )
+        if hasattr(self, 'lbl_backlash_status'):
+            if is_active:
+                self.lbl_backlash_status.config(text="● ACTIVO", fg="#16a34a", bg="#dcfce7")
+            else:
+                self.lbl_backlash_status.config(text="○ DESACTIVADO", fg="#64748b", bg="#f1f5f9")
+
+    def toggle_backlash_manual(self):
+        """Conmuta manualmente la activación de compensación de giros extras (backlash).
+        Únicamente se modifica al presionar este botón, nunca de forma automática."""
+        self.backlash_active = not getattr(self, 'backlash_active', False)
+        if hasattr(self, 'var_backlash_enable'):
+            self.var_backlash_enable.set(self.backlash_active)
+
+        # Guardar estado en el perfil activo de robot_config.json
+        if hasattr(self, 'robot_config') and "profiles" in self.robot_config:
+            p_name = getattr(self, 'active_profile_name', 'Robot MK2 Gato 31:1 (Predeterminado)')
+            if p_name in self.robot_config["profiles"]:
+                self.robot_config["profiles"][p_name]["backlash_enabled"] = self.backlash_active
+                self.save_robot_config_file(self.robot_config)
+
+        self._update_backlash_button_ui()
+
+    def _on_toggle_backlash(self):
+        """Compatibilidad con llamadas externas."""
+        self._update_backlash_button_ui()
+
+    def save_backlash_settings(self):
+        """Lee y almacena las vueltas extras por holgura para CW y CCW de cada motor (6 campos).
+        NO modifica el estado de activación manual ni usa temporizadores que lo desactiven."""
+        try:
+            for i in range(3):
+                v_cw = float(self.ent_backlash_cw[i].get())
+                v_ccw = float(self.ent_backlash_ccw[i].get())
+                self.backlash_turns[f"m{i+1}_cw"] = max(0.0, v_cw)
+                self.backlash_turns[f"m{i+1}_ccw"] = max(0.0, v_ccw)
+
+            # Guardar en robot_config.json
+            if hasattr(self, 'robot_config') and "profiles" in self.robot_config:
+                p_name = getattr(self, 'active_profile_name', 'Robot MK2 Gato 31:1 (Predeterminado)')
+                if p_name in self.robot_config["profiles"]:
+                    self.robot_config["profiles"][p_name]["backlash_turns"] = dict(self.backlash_turns)
+                    self.robot_config["profiles"][p_name]["backlash_enabled"] = self.backlash_active
+                    self.save_robot_config_file(self.robot_config)
+
+            if hasattr(self, 'lbl_backlash_save_msg'):
+                self.lbl_backlash_save_msg.config(text="✓ Valores guardados en perfil", fg="#16a34a")
+                self.after(3000, lambda: self.lbl_backlash_save_msg.config(text="") if hasattr(self, 'lbl_backlash_save_msg') else None)
+        except (ValueError, IndexError) as e:
+            messagebox.showerror("Error en Compensación", f"Valores numéricos de vueltas no válidos:\n{e}")
 
     def update_joint_presets_ui(self, ax, rmin, rmax):
         """Regenera los 5 botones de presets rápidos adaptados exactamente a los límites configurados."""
@@ -2218,7 +2364,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         u_p1, v_p1 = self.project_3d(ptr_x, ptr_y, 2.0, cx, cy, scale)
         cv.create_line(u_p0, v_p0, u_p1, v_p1, fill=COLOR_CYAN_ACCENT, width=3, arrow=tk.LAST)
 
-        # Columna vertical de la base (d1 = 10.0 cm)
+        # Columna vertical de la base (d1 = 18.0 cm)
         u_col_b, v_col_b = self.project_3d(0, 0, 2.0, cx, cy, scale)
         u_col_t, v_col_t = self.project_3d(0, 0, self.kin.d1, cx, cy, scale)
         cv.create_line(u_col_b, v_col_b, u_col_t, v_col_t, fill="#94a3b8", width=14, capstyle=tk.ROUND)
@@ -2563,7 +2709,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.btn_dismiss_stall = tk.Button(
             self.frame_stall_banner, text="Despejar Alerta", bg="#b91c1c", fg="#ffffff",
             activebackground="#991b1b", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
-            cursor="hand2", command=lambda: self.frame_stall_banner.pack_forget()
+            cursor="hand2", command=self.dismiss_stall_alert
         )
         self.btn_dismiss_stall.pack(side=tk.RIGHT)
 
@@ -2642,23 +2788,23 @@ class Robot3GDLGatoVisionController(tk.Tk):
         ik_input_box = tk.Frame(p_center, bg=COLOR_BG_CARD, padx=10, pady=8, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
         ik_input_box.pack(fill=tk.X, pady=6)
 
-        # Fila 1: Selector de Modo de Coordenadas (Relativo Cero Home / Absoluto Base)
+        # Fila 1: Selector de Modo de Coordenadas (Absoluto Base / Relativo Cero Home)
         r_mode = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
         r_mode.pack(fill=tk.X, pady=(0, 4))
-        self.var_coord_mode = tk.StringVar(value="rel")
+        self.var_coord_mode = tk.StringVar(value="abs")
         tk.Label(r_mode, text="Sistema:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
-        rb_rel = tk.Radiobutton(
-            r_mode, text="Relativo Cero Home (0,0,0)", variable=self.var_coord_mode, value="rel",
-            bg=COLOR_BG_CARD, fg="#0f172a", selectcolor="#e2e8f0", activebackground=COLOR_BG_CARD,
-            font=("Segoe UI", 8, "bold"), command=lambda: self.set_coord_mode(True)
-        )
-        rb_rel.pack(side=tk.LEFT, padx=(0, 8))
         rb_abs = tk.Radiobutton(
-            r_mode, text="Absoluto Base (Mesa Z=-29.1)", variable=self.var_coord_mode, value="abs",
-            bg=COLOR_BG_CARD, fg="#64748b", selectcolor="#e2e8f0", activebackground=COLOR_BG_CARD,
-            font=("Segoe UI", 8), command=lambda: self.set_coord_mode(False)
+            r_mode, text="Absoluto Base (0,0,0) [Recomendado]", variable=self.var_coord_mode, value="abs",
+            bg=COLOR_BG_CARD, fg="#0f172a", selectcolor="#e2e8f0", activebackground=COLOR_BG_CARD,
+            font=("Segoe UI", 8, "bold"), command=lambda: self.set_coord_mode(False)
         )
-        rb_abs.pack(side=tk.LEFT)
+        rb_abs.pack(side=tk.LEFT, padx=(0, 8))
+        rb_rel = tk.Radiobutton(
+            r_mode, text="Relativo Cero Home", variable=self.var_coord_mode, value="rel",
+            bg=COLOR_BG_CARD, fg="#64748b", selectcolor="#e2e8f0", activebackground=COLOR_BG_CARD,
+            font=("Segoe UI", 8), command=lambda: self.set_coord_mode(True)
+        )
+        rb_rel.pack(side=tk.LEFT)
 
         # Fila 2: Inputs numéricos X, Y, Z y botón de cálculo IK
         r_inputs = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
@@ -2691,16 +2837,22 @@ class Robot3GDLGatoVisionController(tk.Tk):
         r_jog.pack(fill=tk.X, pady=(3, 2))
 
         tk.Label(r_jog, text="Paso Z:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 3))
-        btn_z_up5 = tk.Button(r_jog, text="▲ +5cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=5.0))
+        btn_z_up10 = tk.Button(r_jog, text="▲ +10cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=10.0))
+        btn_z_up10.pack(side=tk.LEFT, padx=1)
+        btn_z_up5 = tk.Button(r_jog, text="▲ +5cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=5.0))
         btn_z_up5.pack(side=tk.LEFT, padx=1)
-        btn_z_up1 = tk.Button(r_jog, text="▲ +1cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=1.0))
+        btn_z_up1 = tk.Button(r_jog, text="▲ +1cm", bg="#0284c7", fg="#ffffff", activebackground="#0369a1", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=1.0))
         btn_z_up1.pack(side=tk.LEFT, padx=1)
-        btn_z_dn1 = tk.Button(r_jog, text="▼ -1cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-1.0))
+        btn_z_dn1 = tk.Button(r_jog, text="▼ -1cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-1.0))
         btn_z_dn1.pack(side=tk.LEFT, padx=1)
-        btn_z_dn5 = tk.Button(r_jog, text="▼ -5cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=4, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-5.0))
-        btn_z_dn5.pack(side=tk.LEFT, padx=(1, 6))
+        btn_z_dn5 = tk.Button(r_jog, text="▼ -5cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-5.0))
+        btn_z_dn5.pack(side=tk.LEFT, padx=1)
+        btn_z_dn10 = tk.Button(r_jog, text="▼ -10cm", bg="#d97706", fg="#ffffff", activebackground="#b45309", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dz=-10.0))
+        btn_z_dn10.pack(side=tk.LEFT, padx=(1, 5))
 
         tk.Label(r_jog, text="Paso X:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 2))
+        btn_x_b10 = tk.Button(r_jog, text="X -10", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-10.0))
+        btn_x_b10.pack(side=tk.LEFT, padx=1)
         btn_x_b5 = tk.Button(r_jog, text="X -5", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-5.0))
         btn_x_b5.pack(side=tk.LEFT, padx=1)
         btn_x_back = tk.Button(r_jog, text="X -2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=-2.0))
@@ -2708,7 +2860,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
         btn_x_fwd = tk.Button(r_jog, text="X +2", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=2.0))
         btn_x_fwd.pack(side=tk.LEFT, padx=1)
         btn_x_f5 = tk.Button(r_jog, text="X +5", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=5.0))
-        btn_x_f5.pack(side=tk.LEFT, padx=(1, 4))
+        btn_x_f5.pack(side=tk.LEFT, padx=1)
+        btn_x_f10 = tk.Button(r_jog, text="X +10", bg="#475569", fg="#ffffff", activebackground="#334155", font=("Segoe UI", 7, "bold"), padx=3, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=lambda: self.jog_cartesian(dx=10.0))
+        btn_x_f10.pack(side=tk.LEFT, padx=(1, 4))
 
         btn_zero_fast = tk.Button(r_jog, text="⟲ Cero (0,0,0)", bg="#15803d", fg="#ffffff", activebackground="#166534", font=("Segoe UI", 7, "bold"), padx=6, pady=1, bd=0, relief=tk.FLAT, cursor="hand2", command=self.cmd_home)
         btn_zero_fast.pack(side=tk.RIGHT)
@@ -2970,11 +3124,72 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         btn_apply_limits.pack(fill=tk.X, pady=(3, 1))
 
+        # ======================================================================
+        # Panel de Compensación de Backlash / Juego de Reductores Cicloidales 31:1
+        # 6 Campos individuales para vueltas extras (Horario / Antihorario por motor)
+        # ======================================================================
+        backlash_box = tk.Frame(p_inner, bg=COLOR_BG_CARD, padx=6, pady=4, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
+        backlash_box.pack(fill=tk.X, pady=(0, 4))
+
+        r_b_hdr = tk.Frame(backlash_box, bg=COLOR_BG_CARD)
+        r_b_hdr.pack(fill=tk.X)
+        tk.Label(r_b_hdr, text="Compensación Juego Reductor (Backlash)", bg=COLOR_BG_CARD, fg="#0284c7", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+        self.lbl_backlash_status = tk.Label(r_b_hdr, text="○ DESACTIVADO", bg="#f1f5f9", fg="#64748b", font=("Segoe UI", 7, "bold"), padx=5, pady=1)
+        self.lbl_backlash_status.pack(side=tk.RIGHT)
+
+        tk.Label(
+            backlash_box,
+            text="Vueltas extras NEMA 17 por holgura (1 vta = 11.61° reductor 31:1 | 0.5 vta = 180° motor):",
+            bg=COLOR_BG_CARD, fg="#64748b", font=("Segoe UI", 7), justify=tk.LEFT
+        ).pack(anchor=tk.W, pady=(1, 3))
+
+        self.ent_backlash_cw = []
+        self.ent_backlash_ccw = []
+        b_names = ["M1 Base:", "M2 Hombro:", "M3 Codo:"]
+        for m_i in range(3):
+            r_b = tk.Frame(backlash_box, bg=COLOR_BG_CARD)
+            r_b.pack(fill=tk.X, pady=1)
+            tk.Label(r_b, text=b_names[m_i], width=11, anchor=tk.W, bg=COLOR_BG_CARD, fg="#0f172a", font=("Consolas", 8, "bold")).pack(side=tk.LEFT)
+
+            tk.Label(r_b, text="CW (+):", bg=COLOR_BG_CARD, fg="#0284c7", font=("Segoe UI", 7, "bold")).pack(side=tk.LEFT)
+            e_cw = tk.Entry(r_b, width=5, bg="#ffffff", fg="#0f172a", font=("Consolas", 8, "bold"), bd=1, relief=tk.SOLID)
+            e_cw.insert(0, f"{self.backlash_turns.get(f'm{m_i+1}_cw', 0.0):.2f}")
+            e_cw.pack(side=tk.LEFT, padx=(2, 6))
+            self.ent_backlash_cw.append(e_cw)
+
+            tk.Label(r_b, text="CCW (-):", bg=COLOR_BG_CARD, fg="#d97706", font=("Segoe UI", 7, "bold")).pack(side=tk.LEFT)
+            e_ccw = tk.Entry(r_b, width=5, bg="#ffffff", fg="#0f172a", font=("Consolas", 8, "bold"), bd=1, relief=tk.SOLID)
+            e_ccw.insert(0, f"{self.backlash_turns.get(f'm{m_i+1}_ccw', 0.0):.2f}")
+            e_ccw.pack(side=tk.LEFT, padx=2)
+            self.ent_backlash_ccw.append(e_ccw)
+
+        # Botón manual de activación / desactivación (100% manual, nunca automático)
+        self.btn_toggle_backlash = tk.Button(
+            backlash_box, text="○ ACTIVAR COMPENSACIÓN", bg="#475569", fg="#ffffff",
+            activebackground="#334155", activeforeground="#ffffff",
+            font=("Segoe UI", 8, "bold"), pady=3, bd=1, relief=tk.RAISED, cursor="hand2",
+            command=self.toggle_backlash_manual
+        )
+        self.btn_toggle_backlash.pack(fill=tk.X, pady=(4, 2))
+
+        # Botón para guardar valores numéricos
+        btn_save_backlash = tk.Button(
+            backlash_box, text="💾 Guardar Valores (6 Campos)", bg="#0284c7", fg="#ffffff",
+            activebackground="#0369a1", font=("Segoe UI", 7, "bold"), pady=2, bd=0, relief=tk.FLAT, cursor="hand2",
+            command=self.save_backlash_settings
+        )
+        btn_save_backlash.pack(fill=tk.X, pady=(1, 1))
+
+        self.lbl_backlash_save_msg = tk.Label(backlash_box, text="", bg=COLOR_BG_CARD, font=("Segoe UI", 7, "bold"))
+        self.lbl_backlash_save_msg.pack(anchor=tk.CENTER)
+
+        self._update_backlash_button_ui()
+
         # Presets seguros acordes al rango exacto de cada articulación
         joint_presets = [
-            [-60, -30, 0, 30, 60],     # M1: Base [-60°, 60°]
-            [-60, -30, 0, 30, 60],     # M2: Hombro [-60°, 60°]
-            [0, 20, 40, 60, 80]        # M3: Codo [0°, 85°]
+            [-90, -45, 0, 45, 90],     # M1: Base [-180°, 180°]
+            [-60, -30, 0, 45, 90],     # M2: Hombro [-90°, 95°]
+            [-45, -20, 0, 45, 90]      # M3: Codo [-60°, 100°]
         ]
 
         for ax in range(3):
@@ -3253,9 +3468,9 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.robot_config["current_profile"] = profile_name
         self.save_robot_config_file(self.robot_config)
 
-        # 1. Actualizar Geometría en Cinemática Analítica
+        # 1. Actualizar Geometría en Cinemática Analítica (Base Z=0, Hombro Z=18 cm)
         geom = p.get("geometry", {})
-        d1 = float(geom.get("d1", 10.0))
+        d1 = float(geom.get("d1", 18.0))
         a1 = float(geom.get("a1", 11.0))
         a2 = float(geom.get("a2", 32.922))
         a3 = float(geom.get("a3", 32.934))
@@ -3264,20 +3479,44 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.kin.a2 = a2; self.kin.a2_m = a2 / 100.0
         self.kin.a3 = a3; self.kin.a3_m = a3 / 100.0
 
-        # 2. Actualizar Límites Angulares de Seguridad con Protección Anticolisión M2-M3
+        # 2. Actualizar Límites Angulares de Seguridad
         lims = p.get("limits", {})
-        raw_m1 = lims.get("m1", [-60.0, 60.0])
+        raw_m1 = lims.get("m1", [-180.0, 180.0])
         l_m1 = (min(float(raw_m1[0]), float(raw_m1[1])), max(float(raw_m1[0]), float(raw_m1[1])))
 
-        raw_m2 = lims.get("m2", [-60.0, 60.0])
+        raw_m2 = lims.get("m2", [-90.0, 95.0])
         l_m2 = (min(float(raw_m2[0]), float(raw_m2[1])), max(float(raw_m2[0]), float(raw_m2[1])))
 
-        raw_m3 = lims.get("m3", [-90.0, 0.0])
-        v1_3, v2_3 = float(raw_m3[0]), float(raw_m3[1])
-        # REGLA ESTRICTA DE OPERACIÓN: M3 nunca hacia atrás (max <= 0.0°). Solo Home (0°) y adelante.
-        l_m3 = (min(v1_3, v2_3), min(0.0, max(v1_3, v2_3)))
+        raw_m3 = lims.get("m3", [0.0, 85.0])
+        l_m3 = (min(float(raw_m3[0]), float(raw_m3[1])), max(float(raw_m3[0]), float(raw_m3[1])))
         self.kin.limits = [l_m1, l_m2, l_m3]
         self.gauge_ranges = [l_m1, l_m2, l_m3]
+
+        # 2b. Cargar Compensación de Backlash (Vueltas Extras Motor NEMA 17)
+        b_turns = p.get("backlash_turns", {})
+        self.backlash_turns = {
+            "m1_cw": float(b_turns.get("m1_cw", 0.0)),
+            "m1_ccw": float(b_turns.get("m1_ccw", 0.0)),
+            "m2_cw": float(b_turns.get("m2_cw", 0.0)),
+            "m2_ccw": float(b_turns.get("m2_ccw", 0.0)),
+            "m3_cw": float(b_turns.get("m3_cw", 0.0)),
+            "m3_ccw": float(b_turns.get("m3_ccw", 0.0)),
+        }
+        b_enabled = bool(p.get("backlash_enabled", False))
+        self.backlash_active = b_enabled
+        if hasattr(self, 'var_backlash_enable'):
+            self.var_backlash_enable.set(b_enabled)
+
+        if hasattr(self, 'ent_backlash_cw') and hasattr(self, 'ent_backlash_ccw'):
+            for m_i in range(3):
+                if m_i < len(self.ent_backlash_cw):
+                    self.ent_backlash_cw[m_i].delete(0, tk.END)
+                    self.ent_backlash_cw[m_i].insert(0, f"{self.backlash_turns[f'm{m_i+1}_cw']:.2f}")
+                if m_i < len(self.ent_backlash_ccw):
+                    self.ent_backlash_ccw[m_i].delete(0, tk.END)
+                    self.ent_backlash_ccw[m_i].insert(0, f"{self.backlash_turns[f'm{m_i+1}_ccw']:.2f}")
+
+        self._update_backlash_button_ui()
 
         # Actualizar casillas y dispensador según la geometría del perfil
         self.recalculate_board_cells()
@@ -3415,8 +3654,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 dyn = p.get("dynamics", {})
 
                 txt = (
-                    f"• Geometría: d1={geom.get('d1', 10)}cm | a1={geom.get('a1', 11)}cm\n"
-                    f"             a2={geom.get('a2', 32.9)}cm | a3={geom.get('a3', 32.9)}cm\n"
+                    f"• Geometría: d1={geom.get('d1', 18.0)}cm | a1={geom.get('a1', 11.0)}cm\n"
+                    f"             a2={geom.get('a2', 32.922)}cm | a3={geom.get('a3', 32.934)}cm\n"
                     f"• Reducción: M1={red.get('m1', 31)}:1 | M2={red.get('m2', 31)}:1 | M3={red.get('m3', 31)}:1\n"
                     f"• Límites:   M1 {lim.get('m1', [-60,60])}° | M2 {lim.get('m2', [0,95])}°\n"
                     f"             M3 {lim.get('m3', [-165,5])}°\n"
@@ -3676,7 +3915,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             tk.Label(g_top, text="4. GEOMETRÍA DE ESLABONES (cm)", bg=COLOR_BG_PANEL, fg=COLOR_CYAN_ACCENT, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
             tk.Button(
                 g_top, text="↺ Reset MK2", bg="#e2e8f0", fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 7, "bold"), relief=tk.SOLID, bd=1, padx=4, pady=1, cursor="hand2",
-                command=lambda: (ent_d1.delete(0, tk.END), ent_d1.insert(0, "10.0"),
+                command=lambda: (ent_d1.delete(0, tk.END), ent_d1.insert(0, "18.0"),
                                  ent_a1.delete(0, tk.END), ent_a1.insert(0, "11.0"),
                                  ent_a2.delete(0, tk.END), ent_a2.insert(0, "32.922"),
                                  ent_a3.delete(0, tk.END), ent_a3.insert(0, "32.934"))
@@ -3688,7 +3927,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
             tk.Label(g_grid, text="d1 (Elevación vertical Base):", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 8)).grid(row=0, column=0, sticky=tk.W, pady=2)
             ent_d1 = tk.Entry(g_grid, bg="#ffffff", fg=COLOR_TEXT_PRIMARY, font=("Consolas", 8, "bold"), width=8, relief=tk.SOLID, bd=1)
-            ent_d1.insert(0, str(geom_in.get("d1", 10.0)))
+            ent_d1.insert(0, str(geom_in.get("d1", 18.0)))
             ent_d1.grid(row=0, column=1, padx=4)
             tk.Label(g_grid, text="cm", bg=COLOR_BG_PANEL, fg="#64748b", font=("Segoe UI", 7)).grid(row=0, column=2, sticky=tk.W)
 
@@ -3965,6 +4204,15 @@ class Robot3GDLGatoVisionController(tk.Tk):
         # Enviar consigna de regreso al cero calibrado
         self.send_angles_command(0.0, 0.0, 0.0)
 
+    def dismiss_stall_alert(self):
+        """Oculta el banner de alerta y sincroniza consignas al ángulo actual para despejar la condición de atasco."""
+        if hasattr(self, 'frame_stall_banner'):
+            self.frame_stall_banner.pack_forget()
+        self.target_angles = list(self.current_angles)
+        self.last_nominal_target = list(self.current_angles)
+        self.last_backlash_offset = [0.0, 0.0, 0.0]
+        self.send_angles_command(self.current_angles[0], self.current_angles[1], self.current_angles[2])
+
     def handle_stall_collision_alarm(self, motor_idx, target_deg=0.0, current_deg=0.0):
         """
         Maneja la detección de colisión o atasco mecánico por el Protocolo Anti-Choque:
@@ -3972,9 +4220,11 @@ class Robot3GDLGatoVisionController(tk.Tk):
         desplazamiento angular (motor atascado, choque con tuerca, obstáculo o fin de carrera),
         el firmware y la GUI detienen inmediatamente todo el movimiento para proteger reductor y driver.
         """
-        # 1. Detener cualquier secuencia activa (Tour 1..9, Pick & Place o IA Gato)
+        # 1. Detener cualquier secuencia activa (Tour 1..9, Pick & Place o IA Gato) y frenar motores
         self.tour_active = False
         self.is_robot_busy = False
+        self._slider_tx_pending = False
+        self.cmd_stop()
 
         # 2. Frenar consignas y sincronizar a la postura actual
         self.target_angles = list(self.current_angles)
