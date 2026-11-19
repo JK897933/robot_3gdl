@@ -498,6 +498,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
         }
         self.last_nominal_target = [0.0, 0.0, 0.0]
         self.last_backlash_offset = [0.0, 0.0, 0.0]
+        self.encoder_info_deg = [0.0, 0.0, 0.0]
+        self.limit_switches = [0, 0, 0]
 
         # Disposición espacial de las 9 casillas del tablero de Gato y Dispensador
         # Calculadas automáticamente en la zona segura libre de colisión de tuerca M2-M3
@@ -594,6 +596,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
             self.last_nominal_target = [0.0, 0.0, 0.0]
         if not hasattr(self, 'last_backlash_offset'):
             self.last_backlash_offset = [0.0, 0.0, 0.0]
+        self.encoder_info_deg = [0.0, 0.0, 0.0]
+        self.limit_switches = [0, 0, 0]
 
         is_active = getattr(self, 'backlash_active', False)
         if not is_active and hasattr(self, 'var_backlash_enable'):
@@ -627,6 +631,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
         else:
             self.last_nominal_target = list(nominal)
             self.last_backlash_offset = [0.0, 0.0, 0.0]
+        self.encoder_info_deg = [0.0, 0.0, 0.0]
+        self.limit_switches = [0, 0, 0]
 
         # REGLA DE OPERACIÓN (LÍMITES CONFIGURADOS):
         l1_min, l1_max = self.kin.limits[0]
@@ -810,14 +816,39 @@ class Robot3GDLGatoVisionController(tk.Tk):
                                     self.dispatch_ui(_sync_sliders_free)
                                 continue
 
-                            # Protocolo Anti-Choque: Alarma de Atasco por Encoder AS5600 inmóvil
+                            # Alarmas de Homing:
                             if parts[0] == "ALARM" and len(parts) >= 3:
-                                if parts[1] == "STALL":
-                                    m_str = parts[2].replace("M", "")
-                                    m_id = int(m_str) if m_str.isdigit() else 0
-                                    t_deg = float(parts[3]) if len(parts) > 3 else 0.0
-                                    c_deg = float(parts[4]) if len(parts) > 4 else 0.0
-                                    self.dispatch_ui(lambda mi=m_id, td=t_deg, cd=c_deg: self.handle_stall_collision_alarm(mi, td, cd))
+                                if parts[1] == "HOMING_TIMEOUT":
+                                    ax_name = parts[2]
+                                    self.dispatch_ui(lambda ax=ax_name: self._on_homing_result(False, ax))
+                                continue
+
+                            # Confirmación de Homing con Switches
+                            if parts[0] == "ACK" and len(parts) >= 3 and parts[2] == "HOMING_OK":
+                                self.dispatch_ui(lambda: self._on_homing_result(True, ""))
+                                continue
+
+                            # Ángulos informativos de encoders AS5600 (solo lectura, no PID)
+                            if parts[0] == "ENC_INFO" and len(parts) >= 4:
+                                try:
+                                    self.encoder_info_deg = [float(parts[1]), float(parts[2]), float(parts[3])]
+                                    if hasattr(self, "lbl_enc_info"):
+                                        txt = f"Encoders (Solo Info): M1={self.encoder_info_deg[0]:+.1f}° | M2={self.encoder_info_deg[1]:+.1f}° | M3={self.encoder_info_deg[2]:+.1f}°"
+                                        self.dispatch_ui(lambda t=txt: self.lbl_enc_info.config(text=t))
+                                except Exception:
+                                    pass
+                                continue
+
+                            # Estado en vivo de los 3 switches de límite de Home
+                            if parts[0] == "SW" and len(parts) >= 4:
+                                try:
+                                    self.limit_switches = [int(parts[1]), int(parts[2]), int(parts[3])]
+                                    if hasattr(self, "lbl_sw_status"):
+                                        sw_txt = f"Switches Home: M1[{self.limit_switches[0]}] M2[{self.limit_switches[1]}] M3[{self.limit_switches[2]}]"
+                                        sw_fg = COLOR_GREEN_SUCCESS if any(self.limit_switches) else COLOR_TEXT_MUTED
+                                        self.dispatch_ui(lambda t=sw_txt, fg=sw_fg: self.lbl_sw_status.config(text=t, fg=fg))
+                                except Exception:
+                                    pass
                                 continue
 
                             # Trama de telemetría de Encoders: $ENC,1,<valid>,<md>,<raw>,2,...
@@ -1442,39 +1473,21 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 cs = self.calculate_checksum(payload)
                 self.send_serial_raw(f"${payload}*{cs:02X}\r\n")
         else: # "place"
-            # Prioridad 1: Si existe calibración directa de ángulos guardados para esta casilla física
-            calib_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "casillas_calibradas.json")
-            taught_angles = None
-            if os.path.exists(calib_file):
-                try:
-                    with open(calib_file, "r", encoding="utf-8") as f:
-                        c_cell = json.load(f).get("cells", {}).get(str(cell_idx + 1))
-                        if c_cell and "angles" in c_cell:
-                            taught_angles = tuple(c_cell["angles"])
-                except Exception:
-                    pass
-
-            if taught_angles:
-                angles = taught_angles
-                reachable = True
-                msg = "OK (Ángulos Calibrados 1:1)"
-            else:
-                angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, cz, elbow_up=True)
+            # Transforma las coordenadas cartesianas (cx, cy, cz) de la casilla (guardadas
+            # por calibrador_casillas.py o por el tablero por defecto) usando Cinemática Inversa.
+            angles, reachable, msg = self.kin.inverse_kinematics(cx, cy, cz, elbow_up=True)
 
             if not reachable:
                 self.lbl_ik_status.config(text=f"Casilla {cell_idx+1} [Tablero]: {msg}", fg=COLOR_RED_DANGER)
                 return
             if hasattr(self, 'lbl_cell_angles_info'):
-                info_txt = f"Casilla {cell_idx+1} [TABLERO 1:1]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°" if taught_angles else f"Casilla {cell_idx+1} [TABLERO Z={cz:.1f}cm]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°"
+                info_txt = f"Casilla {cell_idx+1} [IK X={cx:.1f}, Y={cy:.1f}, Z={cz:.1f}]: J1={angles[0]:.2f}°, J2={angles[1]:.2f}°, J3={angles[2]:.2f}°"
                 self.lbl_cell_angles_info.config(
                     text=info_txt,
                     fg=COLOR_GREEN_SUCCESS
                 )
 
-            if taught_angles:
-                self.cmd_goto_angles(angles[0], angles[1], angles[2])
-            else:
-                self.cmd_goto_xyz(cx, cy, cz)
+            self.cmd_goto_xyz(cx, cy, cz)
 
             if self.running and self.serial_port and self.serial_port.is_open:
                 self.pkt_seq = (self.pkt_seq + 1) % 10000
@@ -1520,7 +1533,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             center_x = 53.0 if getattr(self.kin, 'a2', 32.9) > 28.0 else 42.0
 
         self.board_center_x = center_x
-        d = 4.5
+        d = 5.5
         self.cell_coords = [
             (center_x + d,  d, 3.0),   # Casilla 1 (Fila 1, Col 1 - Lejana Izq)
             (center_x + d,  0.0, 3.0), # Casilla 2 (Fila 1, Col 2 - Lejana Centro)
@@ -1923,6 +1936,86 @@ class Robot3GDLGatoVisionController(tk.Tk):
         """Envía el robot a su posición HOME (55.0, 0.0, 10.0 cm | Relativo 0,0,0)."""
         self.motors_free_state = False
         self.cmd_goto_xyz(self.HOME_X, self.HOME_Y, self.HOME_Z)
+
+    def cmd_homing_switches(self):
+        """Inicia la secuencia de Homing físico usando los 3 switches de límite en el ESP32."""
+        if not (self.running and self.serial_port and self.serial_port.is_open):
+            messagebox.showwarning("Sin Conexión", "Conecta primero el ESP32-S3 por puerto serie.")
+            return
+        self.motors_free_state = False
+        self.pkt_seq = (self.pkt_seq + 1) % 10000
+        payload = f"PKT,{self.pkt_seq},0,HOMING,0.0,0.0,0.0"
+        cs = self.calculate_checksum(payload)
+        self.send_serial_raw(f"${payload}*{cs:02X}\r\n")
+        if hasattr(self, "lbl_ik_status"):
+            self.lbl_ik_status.config(
+                text="Homing con switches en progreso (M3 -> M2 -> M1)...",
+                fg=COLOR_ACCENT
+            )
+
+    def _on_homing_result(self, ok, axis_name=""):
+        """Callback en hilo UI al finalizar o fallar el Homing con switches."""
+        if ok:
+            self.zero_calibrated = True
+            self.target_angles = [0.0, 0.0, 0.0]
+            self.current_angles = [0.0, 0.0, 0.0]
+            x, y, z = self.kin.forward_kinematics(0.0, 0.0, 0.0)
+            self.cart_x, self.cart_y, self.cart_z = x, y, z
+            self.update_zero_bar_ui()
+            if hasattr(self, "lbl_ik_status"):
+                self.lbl_ik_status.config(
+                    text=f"Homing con switches OK: 0.0° fijado | Posición actual ({x:.1f}, {y:.1f}, {z:.1f}) cm",
+                    fg=COLOR_GREEN_SUCCESS
+                )
+        else:
+            if hasattr(self, "lbl_ik_status"):
+                self.lbl_ik_status.config(
+                    text=f"Error Homing: timeout esperando switch en {axis_name}",
+                    fg=COLOR_RED_DANGER
+                )
+            messagebox.showerror("Timeout en Homing", f"No se detectó el switch de límite en {axis_name}.")
+
+    def save_current_pose_to_cell(self):
+        """Guarda la posición actual (cartesiana IK + ángulos articulares) en la casilla 1..9 seleccionada."""
+        try:
+            cell_num = int(self.var_save_cell.get().replace("Casilla ", "").strip())
+        except Exception:
+            cell_num = 1
+        if not (1 <= cell_num <= 9):
+            return
+
+        j1, j2, j3 = self.current_angles if self.running else self.target_angles
+        x, y, z = self.kin.forward_kinematics(j1, j2, j3)
+
+        calib_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "casillas_calibradas.json")
+        data = {"cells": {}}
+        if os.path.exists(calib_file):
+            try:
+                with open(calib_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        data = loaded
+                        if "cells" not in data or not isinstance(data["cells"], dict):
+                            data["cells"] = {}
+            except Exception:
+                pass
+
+        data["cells"][str(cell_num)] = {
+            "cartesian": [round(float(x), 2), round(float(y), 2), round(float(z), 2)],
+            "angles": [round(float(j1), 2), round(float(j2), 2), round(float(j3), 2)]
+        }
+
+        try:
+            with open(calib_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            self.cell_coords[cell_num - 1] = (float(x), float(y), float(z))
+            if hasattr(self, "lbl_ik_status"):
+                self.lbl_ik_status.config(
+                    text=f"Casilla {cell_num} guardada: ({x:.1f}, {y:.1f}, {z:.1f}) cm | J=({j1:.1f}°, {j2:.1f}°, {j3:.1f}°)",
+                    fg=COLOR_GREEN_SUCCESS
+                )
+        except Exception as exc:
+            messagebox.showerror("Error al Guardar", f"No se pudo guardar casillas_calibradas.json: {exc}")
 
     def on_joint_slider(self, ax, val):
         """
@@ -2522,6 +2615,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
           - Aguja analógica dinámica en tiempo real que apunta al ángulo medido.
           - Pivote central blanco y graduaciones en los extremos.
         """
+        if not hasattr(self, 'canvas_gauges') or ax >= len(self.canvas_gauges):
+            return
         cv = self.canvas_gauges[ax]
         cv.delete("all")
         w = cv.winfo_width()
@@ -2692,26 +2787,18 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         self.btn_zero_wizard.pack(side=tk.LEFT, padx=(10, 4))
 
+        self.btn_homing_sw = tk.Button(
+            self.zero_bar, text="Home con Switches", bg="#b45309", fg="#ffffff",
+            activebackground="#92400e", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
+            cursor="hand2", command=self.cmd_homing_switches
+        )
+        self.btn_homing_sw.pack(side=tk.LEFT, padx=3)
+
         self.lbl_zero_quick_angles = tk.Label(
             self.zero_bar, text="M1: +0.00° | M2: +0.00° | M3: +0.00°",
             bg=COLOR_BG_PANEL, fg=COLOR_TEXT_PRIMARY, font=("Consolas", 9, "bold")
         )
         self.lbl_zero_quick_angles.pack(side=tk.RIGHT, padx=4)
-
-        # Banner de Alerta Crítica del Protocolo Anti-Choque / Atasco por Encoder AS5600
-        self.frame_stall_banner = tk.Frame(self, bg="#7f1d1d", padx=14, pady=6, highlightthickness=1, highlightbackground="#ef4444")
-        self.lbl_stall_banner = tk.Label(
-            self.frame_stall_banner,
-            text="[ALERTA ANTI-CHOQUE] Motor bloqueado sin movimiento en encoder.",
-            bg="#7f1d1d", fg="#ffffff", font=("Segoe UI", 9, "bold")
-        )
-        self.lbl_stall_banner.pack(side=tk.LEFT)
-        self.btn_dismiss_stall = tk.Button(
-            self.frame_stall_banner, text="Despejar Alerta", bg="#b91c1c", fg="#ffffff",
-            activebackground="#991b1b", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
-            cursor="hand2", command=self.dismiss_stall_alert
-        )
-        self.btn_dismiss_stall.pack(side=tk.RIGHT)
 
         # ----------------------------------------------------------------------
         # CUERPO PRINCIPAL CON 3 PANELES (IZQUIERDA - CENTRO - DERECHA)
@@ -2889,15 +2976,47 @@ class Robot3GDLGatoVisionController(tk.Tk):
             )
             b.pack(side=tk.LEFT, padx=1)
 
-        # Fila 4: Diagnóstico IK / Error Posicional
+        # Fila 4: Guardar posición actual en Casilla 1..9 + Estado Switches/Encoders (Solo Info)
+        r_save_cell = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
+        r_save_cell.pack(fill=tk.X, pady=(4, 2))
+
+        tk.Label(
+            r_save_cell, text="Calibrar Casilla:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        self.var_save_cell = tk.StringVar(value="Casilla 1")
+        self.combo_save_cell = ttk.Combobox(
+            r_save_cell, textvariable=self.var_save_cell,
+            values=[f"Casilla {i}" for i in range(1, 10)], state="readonly", width=10
+        )
+        self.combo_save_cell.pack(side=tk.LEFT, padx=(0, 6))
+        btn_save_cell = tk.Button(
+            r_save_cell, text="Guardar Posición en Casilla", bg="#059669", fg="#ffffff",
+            activebackground="#047857", font=("Segoe UI", 8, "bold"), padx=8, pady=2, bd=0,
+            relief=tk.FLAT, cursor="hand2", command=self.save_current_pose_to_cell
+        )
+        btn_save_cell.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.lbl_sw_status = tk.Label(
+            r_save_cell, text="Switches Home: M1[0] M2[0] M3[0]",
+            bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Consolas", 8, "bold")
+        )
+        self.lbl_sw_status.pack(side=tk.RIGHT, padx=(6, 0))
+
+        # Fila 5: Diagnóstico IK + Encoders AS5600 (Solo Información)
         r_diag = tk.Frame(ik_input_box, bg=COLOR_BG_CARD)
-        r_diag.pack(fill=tk.X, pady=(6, 0))
+        r_diag.pack(fill=tk.X, pady=(4, 0))
 
         self.lbl_ik_status = tk.Label(
-            r_diag, text="Estado IK: Listo | Cero Home (0, 0, 0) calibrado sobre caja",
+            r_diag, text="Estado IK: Listo | Control Lazo Abierto (Micropasos)",
             bg=COLOR_BG_CARD, fg=COLOR_GREEN_SUCCESS, font=("Consolas", 8)
         )
         self.lbl_ik_status.pack(side=tk.LEFT)
+
+        self.lbl_enc_info = tk.Label(
+            r_diag, text="Encoders (Solo Info): M1=+0.0° | M2=+0.0° | M3=+0.0°",
+            bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Consolas", 8)
+        )
+        self.lbl_enc_info.pack(side=tk.RIGHT)
 
         # Botones de accesos rápidos a posiciones clave: Exclusivamente HOME (Cero calibrado)
         quick_frame = tk.Frame(p_center, bg=COLOR_BG_PANEL)
@@ -3020,15 +3139,15 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.canvas_sim.bind("<MouseWheel>", self.on_sim_mouse_wheel)
 
         # ======================================================================
-        # PANEL DERECHO: VELOCÍMETROS ANALÓGICOS & MONITOREO DINÁMICO (SCROLLABLE)
+        # PANEL DERECHO: CONTROL ARTICULAR LIMPIO + GRÁFICA ENCODERS (SIN PID)
         # ======================================================================
-        p_right = tk.Frame(main_frame, bg=COLOR_BG_PANEL, padx=4, pady=4, highlightthickness=1, highlightbackground=COLOR_BORDER, width=420)
+        p_right = tk.Frame(main_frame, bg=COLOR_BG_PANEL, padx=6, pady=6, highlightthickness=1, highlightbackground=COLOR_BORDER, width=410)
         p_right.pack(side=tk.RIGHT, fill=tk.BOTH, padx=(6, 0))
         p_right.pack_propagate(False)
 
         header_frame = tk.Frame(p_right, bg=COLOR_BG_PANEL)
-        header_frame.pack(fill=tk.X, pady=(0, 3), padx=2)
-        tk.Label(header_frame, text="Monitores Articulares (AS5600)", bg=COLOR_BG_PANEL, fg=COLOR_CYAN_ACCENT, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        header_frame.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(header_frame, text="Control Articular y Encoders", bg=COLOR_BG_PANEL, fg=COLOR_CYAN_ACCENT, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
         btn_test_enc = tk.Button(
             header_frame, text="Diagnóstico Encoders", bg="#475569", fg="#ffffff",
             activebackground="#0d9488", font=("Segoe UI", 7, "bold"), bd=0, padx=6, pady=2,
@@ -3036,36 +3155,32 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         btn_test_enc.pack(side=tk.RIGHT)
 
-        # Contenedor con barra de desplazamiento vertical integrada (Garantiza acceso completo a M1, M2 y M3)
-        canvas_p = tk.Canvas(p_right, bg=COLOR_BG_PANEL, highlightthickness=0)
-        scrollbar_p = ttk.Scrollbar(p_right, orient="vertical", command=canvas_p.yview)
-        canvas_p.configure(yscrollcommand=scrollbar_p.set)
-        scrollbar_p.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas_p.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # Barra fija inferior (siempre visible en cualquier pestaña)
+        act_box = tk.Frame(p_right, bg=COLOR_BG_PANEL)
+        act_box.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
 
-        p_inner = tk.Frame(canvas_p, bg=COLOR_BG_PANEL)
-        window_p = canvas_p.create_window((0, 0), window=p_inner, anchor="nw")
+        self.btn_gripper = tk.Button(
+            act_box, text="Herramienta: OFF", bg="#475569", fg="#ffffff", activebackground="#334155",
+            font=("Segoe UI", 8, "bold"), pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.toggle_gripper
+        )
+        self.btn_gripper.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 3))
 
-        def _on_inner_config(e):
-            canvas_p.configure(scrollregion=canvas_p.bbox("all"))
+        btn_estop = tk.Button(
+            act_box, text="PARO DE EMERGENCIA", bg=COLOR_RED_DANGER, fg="#ffffff", activebackground="#b91c1c",
+            font=("Segoe UI", 8, "bold"), pady=5, bd=0, relief=tk.FLAT, cursor="hand2", command=self.cmd_stop
+        )
+        btn_estop.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(3, 0))
 
-        def _on_canvas_config(e):
-            canvas_p.itemconfig(window_p, width=e.width)
+        # Pestañas limpias para evitar saturación visual
+        nb_right = ttk.Notebook(p_right)
+        nb_right.pack(fill=tk.BOTH, expand=True)
 
-        p_inner.bind("<Configure>", _on_inner_config)
-        canvas_p.bind("<Configure>", _on_canvas_config)
+        tab_ctrl = tk.Frame(nb_right, bg=COLOR_BG_PANEL, padx=4, pady=4)
+        tab_cfg = tk.Frame(nb_right, bg=COLOR_BG_PANEL, padx=4, pady=4)
+        nb_right.add(tab_ctrl, text="  Control & Gráfica  ")
+        nb_right.add(tab_cfg, text="  Límites & Backlash  ")
 
-        def _on_mousewheel_right(event):
-            try:
-                w_str = str(event.widget)
-                if w_str.startswith(str(p_right)):
-                    canvas_p.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-
-        self.bind_all("<MouseWheel>", _on_mousewheel_right, add="+")
-
-        # Rangos seguros de instrumentación (Reductor 31:1 con límites de seguridad mecánica)
+        # Variables de control articular
         self.gauge_ranges = [lim for lim in self.kin.limits]
         self.canvas_gauges = []
         self.gauge_labels = []
@@ -3074,21 +3189,94 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.lbl_slider_max = []
         self.preset_btn_list = []
         self.lbl_turns_nema = []
+        self.encoder_readout_labels = []
+        self.enc_history = [[], [], []]
+        self.enc_history_max = 120
 
         gauge_titles = [
-            "M1: BASE (YAW - 31:1)",
-            "M2: HOMBRO (PITCH - 31:1)",
-            "M3: CODO (PITCH - 31:1)"
+            "M1: BASE (YAW)",
+            "M2: HOMBRO (PITCH)",
+            "M3: CODO (PITCH)"
         ]
+        joint_presets = [
+            [-60, -30, 0, 30, 60],     # M1: Base (solo hacia adelante)
+            [-60, -30, 0, 30, 60],     # M2: Hombro
+            [0, 15, 30, 45, 60]        # M3: Codo
+        ]
+        enc_colors = ["#0284c7", "#16a34a", "#d97706"]
 
-        # Panel de Límites de Seguridad Configurables
-        lim_box = tk.Frame(p_inner, bg=COLOR_BG_CARD, padx=6, pady=4, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
-        lim_box.pack(fill=tk.X, pady=(0, 3))
+        for ax in range(3):
+            g_box = tk.Frame(tab_ctrl, bg=COLOR_BG_CARD, padx=6, pady=4, highlightthickness=1, highlightbackground=COLOR_BORDER)
+            g_box.pack(fill=tk.X, pady=3)
+
+            r_title = tk.Frame(g_box, bg=COLOR_BG_CARD)
+            r_title.pack(fill=tk.X)
+            tk.Label(r_title, text=gauge_titles[ax], bg=COLOR_BG_CARD, fg="#0f172a", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+
+            lbl_enc_ax = tk.Label(r_title, text="Enc: +0.0°", bg=COLOR_BG_CARD, fg=enc_colors[ax], font=("Consolas", 8, "bold"))
+            lbl_enc_ax.pack(side=tk.RIGHT, padx=(6, 0))
+            self.encoder_readout_labels.append(lbl_enc_ax)
+
+            lbl_deg = tk.Label(r_title, text="000.00°", bg=COLOR_BG_CARD, fg="#0f172a", font=("Consolas", 9, "bold"))
+            lbl_deg.pack(side=tk.RIGHT)
+            self.gauge_labels.append(lbl_deg)
+
+            # Fila de Slider: [Min] ==== Slider ==== [Max]
+            rmin, rmax = self.kin.limits[ax]
+            r_slider = tk.Frame(g_box, bg=COLOR_BG_CARD)
+            r_slider.pack(fill=tk.X, pady=2)
+
+            lbl_smin = tk.Label(r_slider, text=f"{rmin:+.0f}°", width=5, bg=COLOR_BG_CARD, fg="#475569", font=("Consolas", 7))
+            lbl_smin.pack(side=tk.LEFT)
+            self.lbl_slider_min.append(lbl_smin)
+
+            slider = tk.Scale(
+                r_slider, from_=rmin, to=rmax, resolution=0.5, orient=tk.HORIZONTAL,
+                bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, activebackground="#1e40af", highlightthickness=0,
+                troughcolor="#e2e8f0", font=("Segoe UI", 7), showvalue=False, bd=0, sliderlength=20,
+                command=lambda val, a=ax: self.on_joint_slider(a, val)
+            )
+            slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+            self.sliders_ax.append(slider)
+
+            lbl_smax = tk.Label(r_slider, text=f"{rmax:+.0f}°", width=5, bg=COLOR_BG_CARD, fg="#475569", font=("Consolas", 7))
+            lbl_smax.pack(side=tk.RIGHT)
+            self.lbl_slider_max.append(lbl_smax)
+
+            # Fila de Presets compactos
+            p_presets = tk.Frame(g_box, bg=COLOR_BG_CARD)
+            p_presets.pack(fill=tk.X, pady=(1, 0))
+            ax_preset_btns = []
+            for deg_preset in joint_presets[ax]:
+                btn_p = tk.Button(
+                    p_presets, text=f"{deg_preset:+d}°" if deg_preset != 0 else "0°", bg="#ffffff", fg="#0f172a",
+                    activebackground="#1e40af", activeforeground="#ffffff", relief=tk.SOLID, bd=1,
+                    font=("Segoe UI", 7, "bold"), padx=2, pady=1, cursor="hand2",
+                    command=lambda a=ax, d=deg_preset: self.set_joint_preset(a, d)
+                )
+                btn_p.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
+                ax_preset_btns.append(btn_p)
+            self.preset_btn_list.append(ax_preset_btns)
+
+        # Gráfica en tiempo real de Encoders AS5600 (Solo monitoreo, sin PID)
+        enc_graph_box = tk.Frame(tab_ctrl, bg=COLOR_BG_CARD, padx=6, pady=5, highlightthickness=1, highlightbackground=COLOR_BORDER)
+        enc_graph_box.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+
+        r_eg_hdr = tk.Frame(enc_graph_box, bg=COLOR_BG_CARD)
+        r_eg_hdr.pack(fill=tk.X, pady=(0, 3))
+        tk.Label(r_eg_hdr, text="Gráfica Encoders AS5600 (Solo Lectura)", bg=COLOR_BG_CARD, fg="#0f172a", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+        tk.Label(r_eg_hdr, text="●M1  ●M2  ●M3", bg=COLOR_BG_CARD, fg="#475569", font=("Consolas", 7, "bold")).pack(side=tk.RIGHT)
+
+        self.canvas_enc_graph = tk.Canvas(enc_graph_box, bg="#ffffff", height=130, highlightthickness=1, highlightbackground=COLOR_BORDER)
+        self.canvas_enc_graph.pack(fill=tk.BOTH, expand=True)
+
+        # --- PESTAÑA 2: LÍMITES, BACKLASH Y TORQUES ---
+        lim_box = tk.Frame(tab_cfg, bg=COLOR_BG_CARD, padx=6, pady=5, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
+        lim_box.pack(fill=tk.X, pady=(0, 5))
 
         r_lim_header = tk.Frame(lim_box, bg=COLOR_BG_CARD)
         r_lim_header.pack(fill=tk.X)
         tk.Label(r_lim_header, text="Límites de Seguridad Articular", bg=COLOR_BG_CARD, fg=COLOR_AMBER_WARNING, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
-
         self.lbl_limits_status = tk.Label(r_lim_header, text="● Límites activos", bg=COLOR_BG_CARD, fg="#15803d", font=("Segoe UI", 7, "bold"))
         self.lbl_limits_status.pack(side=tk.RIGHT)
 
@@ -3112,7 +3300,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             self.ent_lim_max.append(e_max)
 
         r_nut = tk.Frame(lim_box, bg="#f1f5f9", padx=4, pady=2, highlightthickness=1, highlightbackground=COLOR_BORDER)
-        r_nut.pack(fill=tk.X, pady=(2, 2))
+        r_nut.pack(fill=tk.X, pady=(3, 2))
         tk.Label(r_nut, text="Anticolisión M2-M3 (Tuerca):", bg="#f1f5f9", fg="#b45309", font=("Segoe UI", 7, "bold")).pack(side=tk.LEFT)
         self.lbl_nut_status = tk.Label(r_nut, text=f"ACTIVA (Min Codo ≥ {self.kin.limits[2][0]:.0f}°)", bg="#f1f5f9", fg="#15803d", font=("Consolas", 7, "bold"))
         self.lbl_nut_status.pack(side=tk.RIGHT)
@@ -3124,24 +3312,15 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         btn_apply_limits.pack(fill=tk.X, pady=(3, 1))
 
-        # ======================================================================
-        # Panel de Compensación de Backlash / Juego de Reductores Cicloidales 31:1
-        # 6 Campos individuales para vueltas extras (Horario / Antihorario por motor)
-        # ======================================================================
-        backlash_box = tk.Frame(p_inner, bg=COLOR_BG_CARD, padx=6, pady=4, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
-        backlash_box.pack(fill=tk.X, pady=(0, 4))
+        # Compensación de Backlash
+        backlash_box = tk.Frame(tab_cfg, bg=COLOR_BG_CARD, padx=6, pady=5, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
+        backlash_box.pack(fill=tk.X, pady=(0, 5))
 
         r_b_hdr = tk.Frame(backlash_box, bg=COLOR_BG_CARD)
         r_b_hdr.pack(fill=tk.X)
-        tk.Label(r_b_hdr, text="Compensación Juego Reductor (Backlash)", bg=COLOR_BG_CARD, fg="#0284c7", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+        tk.Label(r_b_hdr, text="Compensación Backlash (31:1)", bg=COLOR_BG_CARD, fg="#0284c7", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
         self.lbl_backlash_status = tk.Label(r_b_hdr, text="○ DESACTIVADO", bg="#f1f5f9", fg="#64748b", font=("Segoe UI", 7, "bold"), padx=5, pady=1)
         self.lbl_backlash_status.pack(side=tk.RIGHT)
-
-        tk.Label(
-            backlash_box,
-            text="Vueltas extras NEMA 17 por holgura (1 vta = 11.61° reductor 31:1 | 0.5 vta = 180° motor):",
-            bg=COLOR_BG_CARD, fg="#64748b", font=("Segoe UI", 7), justify=tk.LEFT
-        ).pack(anchor=tk.W, pady=(1, 3))
 
         self.ent_backlash_cw = []
         self.ent_backlash_ccw = []
@@ -3150,7 +3329,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
             r_b = tk.Frame(backlash_box, bg=COLOR_BG_CARD)
             r_b.pack(fill=tk.X, pady=1)
             tk.Label(r_b, text=b_names[m_i], width=11, anchor=tk.W, bg=COLOR_BG_CARD, fg="#0f172a", font=("Consolas", 8, "bold")).pack(side=tk.LEFT)
-
             tk.Label(r_b, text="CW (+):", bg=COLOR_BG_CARD, fg="#0284c7", font=("Segoe UI", 7, "bold")).pack(side=tk.LEFT)
             e_cw = tk.Entry(r_b, width=5, bg="#ffffff", fg="#0f172a", font=("Consolas", 8, "bold"), bd=1, relief=tk.SOLID)
             e_cw.insert(0, f"{self.backlash_turns.get(f'm{m_i+1}_cw', 0.0):.2f}")
@@ -3163,7 +3341,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
             e_ccw.pack(side=tk.LEFT, padx=2)
             self.ent_backlash_ccw.append(e_ccw)
 
-        # Botón manual de activación / desactivación (100% manual, nunca automático)
         self.btn_toggle_backlash = tk.Button(
             backlash_box, text="○ ACTIVAR COMPENSACIÓN", bg="#475569", fg="#ffffff",
             activebackground="#334155", activeforeground="#ffffff",
@@ -3172,7 +3349,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         self.btn_toggle_backlash.pack(fill=tk.X, pady=(4, 2))
 
-        # Botón para guardar valores numéricos
         btn_save_backlash = tk.Button(
             backlash_box, text="💾 Guardar Valores (6 Campos)", bg="#0284c7", fg="#ffffff",
             activebackground="#0369a1", font=("Segoe UI", 7, "bold"), pady=2, bd=0, relief=tk.FLAT, cursor="hand2",
@@ -3185,119 +3361,19 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
         self._update_backlash_button_ui()
 
-        # Presets seguros acordes al rango exacto de cada articulación
-        joint_presets = [
-            [-90, -45, 0, 45, 90],     # M1: Base [-180°, 180°]
-            [-60, -30, 0, 45, 90],     # M2: Hombro [-90°, 95°]
-            [-45, -20, 0, 45, 90]      # M3: Codo [-60°, 100°]
-        ]
-
-        for ax in range(3):
-            g_box = tk.Frame(p_inner, bg=COLOR_BG_CARD, padx=6, pady=3, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
-            g_box.pack(fill=tk.X, pady=2)
-
-            r_title = tk.Frame(g_box, bg=COLOR_BG_CARD)
-            r_title.pack(fill=tk.X)
-            tk.Label(r_title, text=gauge_titles[ax], bg=COLOR_BG_CARD, fg="#0f172a", font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
-
-            lbl_deg = tk.Label(r_title, text="0.0°", bg=COLOR_BG_CARD, fg=COLOR_CYAN_ACCENT, font=("Consolas", 9, "bold"))
-            lbl_deg.pack(side=tk.RIGHT)
-            self.gauge_labels.append(lbl_deg)
-
-            # Telemetría unificada en una sola línea compacta
-            r_telem = tk.Frame(g_box, bg=COLOR_BG_CARD)
-            r_telem.pack(fill=tk.X, pady=(1, 2))
-            lbl_badge = tk.Label(
-                r_telem, text="● ENCODER...",
-                bg="#dcfce7", fg="#15803d", relief=tk.SOLID, bd=1, font=("Segoe UI", 7, "bold"), padx=4, pady=0
-            )
-            lbl_badge.pack(side=tk.LEFT)
-            self.encoder_badge_labels.append(lbl_badge)
-
-            lbl_turns = tk.Label(
-                r_telem, text="NEMA: 0.00 / 31 revs",
-                bg=COLOR_BG_CARD, fg="#475569", font=("Consolas", 7, "bold"), padx=4
-            )
-            lbl_turns.pack(side=tk.LEFT)
-            self.lbl_turns_nema.append(lbl_turns)
-
-            lbl_raw = tk.Label(r_telem, text="Raw: ----", bg=COLOR_BG_CARD, fg="#64748b", font=("Consolas", 7))
-            lbl_raw.pack(side=tk.RIGHT)
-            self.encoder_raw_labels.append(lbl_raw)
-
-            # Tacómetro Analógico Compacto (44px)
-            cv_g = tk.Canvas(g_box, bg="#ffffff", height=44, highlightthickness=0)
-            cv_g.pack(fill=tk.X, pady=(0, 2))
-            self.canvas_gauges.append(cv_g)
-
-            # Fila de Slider: [Min] ==== Slider ==== [Max]
-            rmin, rmax = self.kin.limits[ax]
-            r_slider = tk.Frame(g_box, bg=COLOR_BG_CARD)
-            r_slider.pack(fill=tk.X, pady=1)
-
-            lbl_smin = tk.Label(r_slider, text=f"{rmin:+.0f}°", width=5, bg=COLOR_BG_CARD, fg="#475569", font=("Consolas", 7))
-            lbl_smin.pack(side=tk.LEFT)
-            self.lbl_slider_min.append(lbl_smin)
-
-            slider = tk.Scale(
-                r_slider, from_=rmin, to=rmax, resolution=0.5, orient=tk.HORIZONTAL,
-                bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, activebackground="#1e40af", highlightthickness=0,
-                troughcolor="#e2e8f0", font=("Segoe UI", 7), showvalue=False, bd=0, sliderlength=24,
-                command=lambda val, a=ax: self.on_joint_slider(a, val)
-            )
-            slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-            self.sliders_ax.append(slider)
-
-            lbl_smax = tk.Label(r_slider, text=f"{rmax:+.0f}°", width=5, bg=COLOR_BG_CARD, fg="#475569", font=("Consolas", 7))
-            lbl_smax.pack(side=tk.RIGHT)
-            self.lbl_slider_max.append(lbl_smax)
-
-            # Fila de Presets rápidos dinámicos
-            p_presets = tk.Frame(g_box, bg=COLOR_BG_CARD)
-            p_presets.pack(fill=tk.X, pady=(2, 1))
-            ax_preset_btns = []
-            for deg_preset in joint_presets[ax]:
-                btn_p = tk.Button(
-                    p_presets, text=f"{deg_preset:+d}°" if deg_preset != 0 else "0°", bg="#ffffff", fg="#0f172a",
-                    activebackground="#1e40af", activeforeground="#ffffff", relief=tk.SOLID, bd=1,
-                    font=("Segoe UI", 7, "bold"), padx=2, pady=1, cursor="hand2",
-                    command=lambda a=ax, d=deg_preset: self.set_joint_preset(a, d)
-                )
-                btn_p.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=1)
-                ax_preset_btns.append(btn_p)
-            self.preset_btn_list.append(ax_preset_btns)
-
         # Panel de Dinámica Lagrange-Euler (Torques en tiempo real)
-        dyn_box = tk.Frame(p_inner, bg=COLOR_BG_CARD, padx=8, pady=4, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
-        dyn_box.pack(fill=tk.X, pady=(4, 2))
+        dyn_box = tk.Frame(tab_cfg, bg=COLOR_BG_CARD, padx=8, pady=5, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
+        dyn_box.pack(fill=tk.X, pady=(0, 2))
 
         tk.Label(dyn_box, text="Torques Lagrange-Euler G(q)", bg=COLOR_BG_CARD, fg=COLOR_AMBER_WARNING, font=("Segoe UI", 8, "bold")).pack(anchor=tk.W)
-
         self.lbl_torques = tk.Label(
             dyn_box,
             text="τ1 (Base): 0.000 N·m  |  τ2 (Hombro): 0.000 N·m  |  τ3 (Codo): 0.000 N·m",
             bg=COLOR_BG_CARD, fg="#0f172a", font=("Consolas", 7), justify=tk.LEFT
         )
         self.lbl_torques.pack(anchor=tk.W, pady=(1, 1))
-
         self.lbl_torque_warning = tk.Label(dyn_box, text="● Carga dentro del rango nominal", bg=COLOR_BG_CARD, fg=COLOR_GREEN_SUCCESS, font=("Segoe UI", 7))
         self.lbl_torque_warning.pack(anchor=tk.W)
-
-        # Botones de Acción Rápida (Gripper y Paro)
-        act_box = tk.Frame(p_inner, bg=COLOR_BG_PANEL)
-        act_box.pack(fill=tk.X, pady=(4, 6))
-
-        self.btn_gripper = tk.Button(
-            act_box, text="Herramienta: OFF", bg="#475569", fg="#ffffff", activebackground="#334155",
-            font=("Segoe UI", 8, "bold"), pady=3, bd=0, relief=tk.FLAT, cursor="hand2", command=self.toggle_gripper
-        )
-        self.btn_gripper.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
-
-        btn_estop = tk.Button(
-            act_box, text="PARO DE EMERGENCIA", bg=COLOR_RED_DANGER, fg="#ffffff", activebackground="#b91c1c",
-            font=("Segoe UI", 8, "bold"), pady=3, bd=0, relief=tk.FLAT, cursor="hand2", command=self.cmd_stop
-        )
-        btn_estop.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=2)
 
 
 # ==============================================================================
@@ -3305,6 +3381,44 @@ class Robot3GDLGatoVisionController(tk.Tk):
 # ║ TEMA 11: CICLO DE ANIMACIÓN PRINCIPAL Y PUNTO DE ENTRADA                   ║
 # ╚════════════════════════════════════════════════════════════════════════════╝
 # ==============================================================================
+
+    def draw_encoder_graph(self):
+        """Dibuja la gráfica en tiempo real de los 3 encoders AS5600 (solo monitoreo, sin PID)."""
+        if not hasattr(self, "canvas_enc_graph"):
+            return
+        cv = self.canvas_enc_graph
+        cv.delete("all")
+        w = cv.winfo_width()
+        h = cv.winfo_height()
+        if w < 40 or h < 30:
+            return
+
+        # Rejilla horizontal (-90°, 0°, +90°)
+        pad_l, pad_r, pad_t, pad_b = 30, 8, 8, 10
+        gw = max(10, w - pad_l - pad_r)
+        gh = max(10, h - pad_t - pad_b)
+
+        for deg_ref in (-90, -45, 0, 45, 90):
+            y_ref = pad_t + gh * (1.0 - (deg_ref + 90.0) / 180.0)
+            col = "#cbd5e1" if deg_ref == 0 else "#f1f5f9"
+            cv.create_line(pad_l, y_ref, w - pad_r, y_ref, fill=col, width=1)
+            if deg_ref in (-90, 0, 90):
+                cv.create_text(pad_l - 3, y_ref, text=f"{deg_ref}°", anchor="e", fill="#64748b", font=("Consolas", 7))
+
+        colors_enc = ("#0284c7", "#16a34a", "#d97706")
+        n_max = getattr(self, "enc_history_max", 120)
+
+        for ax in range(3):
+            hist = self.enc_history[ax]
+            if len(hist) < 2:
+                continue
+            pts = []
+            for idx, val in enumerate(hist):
+                clamped = max(-90.0, min(90.0, val))
+                px = pad_l + (idx / max(1, n_max - 1)) * gw
+                py = pad_t + gh * (1.0 - (clamped + 90.0) / 180.0)
+                pts.extend([px, py])
+            cv.create_line(*pts, fill=colors_enc[ax], width=1.8, smooth=False)
 
     def animate(self):
         """
@@ -3335,10 +3449,18 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 else:
                     self.current_angles[ax] = self.target_angles[ax]
 
-        # 3. Actualización visual de instrumentos analógicos
+        # 3. Actualización visual de lecturas y gráfica de encoders (sin PID)
         for ax in range(3):
             self.draw_single_gauge(ax)
             self.gauge_labels[ax].config(text=f"{self.current_angles[ax]:06.2f}°")
+            if hasattr(self, 'encoder_readout_labels') and ax < len(self.encoder_readout_labels):
+                enc_val = self.encoder_info_deg[ax] if self.running else self.current_angles[ax]
+                self.encoder_readout_labels[ax].config(text=f"Enc: {enc_val:+.1f}°")
+            if hasattr(self, 'enc_history'):
+                enc_val = self.encoder_info_deg[ax] if self.running else self.current_angles[ax]
+                self.enc_history[ax].append(enc_val)
+                if len(self.enc_history[ax]) > self.enc_history_max:
+                    self.enc_history[ax].pop(0)
             if hasattr(self, 'lbl_turns_nema') and ax < len(self.lbl_turns_nema):
                 turns_equiv = (self.current_angles[ax] * 31.0) / 360.0
                 self.lbl_turns_nema[ax].config(text=f"NEMA 17: {turns_equiv:5.2f} / 31.0 revs")
@@ -3365,6 +3487,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
                             text="● DESCONECTADO (ERROR I2C)", bg="#fee2e2", fg="#991b1b", relief=tk.SOLID, bd=1
                         )
                         self.encoder_raw_labels[ax].config(text="Raw: N/A", fg="#ef4444")
+
+        self.draw_encoder_graph()
 
         # 4. Redibujado de la escena 3D interactiva y cámara
         self.draw_simulation()
@@ -4204,55 +4328,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
         # Enviar consigna de regreso al cero calibrado
         self.send_angles_command(0.0, 0.0, 0.0)
 
-    def dismiss_stall_alert(self):
-        """Oculta el banner de alerta y sincroniza consignas al ángulo actual para despejar la condición de atasco."""
-        if hasattr(self, 'frame_stall_banner'):
-            self.frame_stall_banner.pack_forget()
-        self.target_angles = list(self.current_angles)
-        self.last_nominal_target = list(self.current_angles)
-        self.last_backlash_offset = [0.0, 0.0, 0.0]
-        self.send_angles_command(self.current_angles[0], self.current_angles[1], self.current_angles[2])
-
-    def handle_stall_collision_alarm(self, motor_idx, target_deg=0.0, current_deg=0.0):
-        """
-        Maneja la detección de colisión o atasco mecánico por el Protocolo Anti-Choque:
-        Si se emiten pulsos de movimiento a un motor pero el encoder AS5600 no detecta
-        desplazamiento angular (motor atascado, choque con tuerca, obstáculo o fin de carrera),
-        el firmware y la GUI detienen inmediatamente todo el movimiento para proteger reductor y driver.
-        """
-        # 1. Detener cualquier secuencia activa (Tour 1..9, Pick & Place o IA Gato) y frenar motores
-        self.tour_active = False
-        self.is_robot_busy = False
-        self._slider_tx_pending = False
-        self.cmd_stop()
-
-        # 2. Frenar consignas y sincronizar a la postura actual
-        self.target_angles = list(self.current_angles)
-        for k in range(3):
-            if hasattr(self, 'sliders_ax') and k < len(self.sliders_ax):
-                self._suppress_slider_tx = True
-                try:
-                    self.sliders_ax[k].set(self.current_angles[k])
-                finally:
-                    self._suppress_slider_tx = False
-            if hasattr(self, 'entries_ax') and k < len(self.entries_ax):
-                self.entries_ax[k].delete(0, tk.END)
-                self.entries_ax[k].insert(0, f"{self.current_angles[k]:.1f}")
-
-        # 3. Mostrar banner de alerta roja en la GUI
-        joint_names = {1: "M1 (Base)", 2: "M2 (Hombro)", 3: "M3 (Codo)"}
-        name_str = joint_names.get(motor_idx, f"M{motor_idx}")
-        msg = (f"[ALERTA ANTI-CHOQUE] {name_str} bloqueado sin movimiento en encoder "
-               f"(Objetivo: {target_deg:.1f}°, Medido: {current_deg:.1f}°). Pulsos detenidos de inmediato.")
-        if hasattr(self, 'lbl_stall_banner') and hasattr(self, 'frame_stall_banner'):
-            self.lbl_stall_banner.config(text=msg)
-            try:
-                self.frame_stall_banner.pack(fill=tk.X, padx=12, pady=(0, 6), before=self.main_frame)
-            except Exception:
-                self.frame_stall_banner.pack(fill=tk.X, padx=12, pady=(0, 6))
-
-        print(f"[ANTI-CHOQUE] {msg}")
-
     def cmd_motors_free(self):
         """Desactiva los drivers TB6600 para mover el robot libremente con las manos."""
         self.pkt_seq = (self.pkt_seq + 1) % 10000
@@ -4489,14 +4564,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
         update_modal_angles()
 
-    def open_standalone_encoder_tester(self):
-        """Abre la herramienta gráfica dedicada de prueba 360° de encoders (test_encoders.py)."""
-        import subprocess, os
-        if self.running:
-            self.handle_serial_disconnect()
-        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_encoders.py")
-        subprocess.Popen([sys.executable, script_path])
-
     def cmd_check_encoders(self):
         """Envía solicitud inmediata de prueba de encoders al ESP32."""
         self.pkt_seq = (self.pkt_seq + 1) % 10000
@@ -4623,34 +4690,12 @@ class Robot3GDLGatoVisionController(tk.Tk):
         ).pack(side=tk.LEFT, padx=4)
 
         tk.Button(
-            btn_bar, text=" ABRIR TESTER 360°", bg="#7c3aed", fg="#ffffff",
-            activebackground="#6d28d9", font=("Segoe UI", 8, "bold"), bd=0, padx=10, pady=6,
-            cursor="hand2", command=lambda: (modal.destroy(), self.open_standalone_encoder_tester())
-        ).pack(side=tk.LEFT, padx=4)
-
-        tk.Button(
             btn_bar, text="CERRAR", bg="#334155", fg="#ffffff",
             activebackground="#475569", font=("Segoe UI", 8, "bold"), bd=0, padx=12, pady=6,
             cursor="hand2", command=modal.destroy
         ).pack(side=tk.RIGHT)
 
         refresh_modal()
-
-    def open_printable_template(self):
-        """Abre la plantilla física a escala 1:1 en PDF para imprimir en papel."""
-        import os, subprocess
-        pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Plantilla_Gato_Escala_1a1.pdf")
-        if os.path.exists(pdf_path):
-            try:
-                if sys.platform.startswith("win"):
-                    os.startfile(pdf_path)
-                else:
-                    subprocess.Popen(["xdg-open", pdf_path])
-                return
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo abrir el PDF:\n{e}")
-        else:
-            messagebox.showerror("Archivo no encontrado", f"No se encontró el archivo:\n{pdf_path}")
 
     def launch_calibrador_casillas(self):
         """Lanza la herramienta gráfica dedicada de calibración de casillas y ajuste de cinemática inversa."""
@@ -4691,14 +4736,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         h_info = tk.Frame(top_m, bg=COLOR_BG_PANEL)
         h_info.pack(side=tk.LEFT)
         tk.Label(h_info, text="PLANTILLA DE CALIBRACIÓN Y VERIFICACIÓN DE POSICIÓN DEL GATO", bg=COLOR_BG_PANEL, fg=COLOR_CYAN_ACCENT, font=("Segoe UI", 11, "bold")).pack(anchor=tk.W)
-        tk.Label(h_info, text="Comprobación visual y milimétrica en tiempo real: Compara la posición real de los encoders con el centro de las casillas.", bg=COLOR_BG_PANEL, fg="#94a3b8", font=("Segoe UI", 8)).pack(anchor=tk.W)
-
-        btn_print = tk.Button(
-            top_m, text="Imprimir Plantilla 1:1 en Papel", bg="#1e40af", fg="#ffffff",
-            activebackground="#0369a1", font=("Segoe UI", 9, "bold"), padx=12, pady=4, bd=0, relief=tk.FLAT,
-            cursor="hand2", command=self.open_printable_template
-        )
-        btn_print.pack(side=tk.RIGHT)
+        tk.Label(h_info, text="Comprobación visual y milimétrica en tiempo real: Compara la posición real con el centro de las casillas.", bg=COLOR_BG_PANEL, fg="#94a3b8", font=("Segoe UI", 8)).pack(anchor=tk.W)
 
         # Contenedor principal dividido en dos columnas (Canvas 2D izquierda / Diagnóstico derecha)
         body = tk.Frame(modal, bg=COLOR_BG_MAIN)

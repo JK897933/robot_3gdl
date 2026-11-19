@@ -701,7 +701,7 @@ class CalibradorCasillasApp(tk.Tk):
             lbl_title = tk.Label(cbox, text=f"#{num} - {name}", bg=COLOR_BG_PANEL, fg=COLOR_ACCENT, font=("Segoe UI", 8, "bold"))
             lbl_title.pack(anchor=tk.W)
 
-            lbl_ang = tk.Label(cbox, text="q: (Sin calibrar)", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_MUTED, font=("Consolas", 7.5))
+            lbl_ang = tk.Label(cbox, text="q: (Sin calibrar)", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_MUTED, font=("Consolas", 8))
             lbl_ang.pack(anchor=tk.W, pady=1)
 
             lbl_xyz = tk.Label(cbox, text="XYZ: Pendiente", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 7))
@@ -730,13 +730,13 @@ class CalibradorCasillasApp(tk.Tk):
 
         d_top = tk.Frame(disp_card, bg=COLOR_BLUE_BG)
         d_top.pack(fill=tk.X)
-        tk.Label(d_top, text="DISPENSADOR DE FICHAS (POSICIÓN PICK)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE, font=("Segoe UI", 8.5, "bold")).pack(side=tk.LEFT)
+        tk.Label(d_top, text="DISPENSADOR DE FICHAS (POSICIÓN PICK)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
 
         d_info = tk.Frame(disp_card, bg=COLOR_BLUE_BG)
         d_info.pack(fill=tk.X, pady=2)
-        self.lbl_disp_ang = tk.Label(d_info, text="q: (Sin calibrar)", bg=COLOR_BLUE_BG, fg=COLOR_TEXT_PRIMARY, font=("Consolas", 7.5))
+        self.lbl_disp_ang = tk.Label(d_info, text="q: (Sin calibrar)", bg=COLOR_BLUE_BG, fg=COLOR_TEXT_PRIMARY, font=("Consolas", 8))
         self.lbl_disp_ang.pack(side=tk.LEFT)
-        self.lbl_disp_xyz = tk.Label(d_info, text="XYZ: Pendiente", bg=COLOR_BLUE_BG, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 7.5))
+        self.lbl_disp_xyz = tk.Label(d_info, text="XYZ: Pendiente", bg=COLOR_BLUE_BG, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8))
         self.lbl_disp_xyz.pack(side=tk.LEFT, padx=12)
 
         d_btns = tk.Frame(disp_card, bg=COLOR_BLUE_BG)
