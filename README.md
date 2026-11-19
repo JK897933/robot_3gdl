@@ -107,6 +107,39 @@ La interfaz principal centraliza el control cartesiano por Cinemática Inversa, 
 
 ---
 
+## 📷 Sistema de Visión Artificial por Cámara (`test_camara_gato.py`)
+
+El módulo de visión permite detectar automáticamente el estado del tablero 3x3 mediante una WebCam cenital sin depender del robot para pruebas:
+
+![Test de Cámara y Lógica del Gato](docs/gui_test_camara.png)
+
+* **Segmentación por Color en Espacio HSV:**
+  * **Fichas Humano (`'X'` - Rojo):** Rangos $H \in [0, 10] \cup [170, 180]$, $S \ge 70$, $V \ge 50$.
+  * **Fichas Robot (`'O'` - Azul):** Rango $H \in [90, 130]$, $S \ge 70$, $V \ge 50$.
+* **Filtro de Estabilidad y Umbral:** El deslizador **`Umbral px`** (por defecto `400 px`) define la cantidad mínima de píxeles de color por casilla, y el filtro temporal evita falsas detecciones mientras se coloca la ficha con la mano.
+* **Controles:** **`Auto-Detectar Turno`** dispara la respuesta de la IA **Minimax** al confirmar una nueva ficha `'X'`, y **`Espejo (Flip)`** invierte horizontalmente la imagen para coincidir con la vista del usuario.
+
+---
+
+## 🎯 Cómo Calibrar el Robot y las Casillas (`calibrador_casillas.py`)
+
+Para asegurar que el efector final coincida con exactitud física sobre las 9 casillas y el dispensador:
+
+![Calibrador de Casillas y Ajuste de Cinemática Inversa](docs/gui_calibrador_casillas.png)
+
+1. **Referenciado de Origen (`Home con Switches`):**
+   En la interfaz principal, pulsa **`Home con Switches`** para que el robot busque automáticamente los 3 switches de límite en orden **`M3 (GPIO 38) → M2 (GPIO 21) → M1 (GPIO 18)`** y establezca `0.0°`.
+2. **Imprimir Plantilla 1:1:**
+   Abre e imprime [`Plantilla_Gato_Escala_1a1.pdf`](Plantilla_Gato_Escala_1a1.pdf) en **Escala 100% (Sin Ajustar)** y colócala centrada frente al robot sobre la mesa (`Z = -29.1 cm`).
+3. **Calibración Teach-In (`calibrar_casillas.bat`):**
+   * Conecta el ESP32-S3 y pulsa **`MOTORES LIBRES (A MANO)`**.
+   * Lleva manualmente el efector al centro de cada **Casilla (1 a 9)** y del **Dispensador de Fichas**, y pulsa **`Guardar`** en cada una (se almacena en `casillas_calibradas.json`).
+4. **Ajuste y Verificación de Cinemática Inversa:**
+   * Pulsa **`CALCULAR CINEMÁTICA INVERSA Y AJUSTAR MODELO`** para verificar las coordenadas $(X, Y, Z)$ y residuales.
+   * Pulsa **`RECORRER CASILLAS 1 A 9 (VERIFICACIÓN TOUR)`** para comprobar que el robot recorre las 9 casillas con precisión.
+
+---
+
 ## 📄 Manual Técnico en PDF
 Consulta el documento completo listo para imprimir en el repositorio:
 * 📄 **[Manual_Robot_3GDL_Gato.pdf](Manual_Robot_3GDL_Gato.pdf)**
