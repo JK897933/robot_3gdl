@@ -2710,14 +2710,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
             top_bar, text="Calibrador 1:1", bg="#15803d", fg="#ffffff", activebackground="#166534",
             font=("Segoe UI", 9, "bold"), padx=10, pady=2, bd=0, relief=tk.FLAT, cursor="hand2", command=self.launch_calibrador_casillas
         )
-        btn_calib.pack(side=tk.LEFT, padx=(0, 6))
-
-        # Botón para cambiar o configurar características del Robot
-        self.btn_robot_config = tk.Button(
-            top_bar, text=f"Perfil: {self.active_profile_name[:18]}", bg="#0284c7", fg="#ffffff", activebackground="#0369a1",
-            font=("Segoe UI", 9, "bold"), padx=10, pady=2, bd=0, relief=tk.FLAT, cursor="hand2", command=self.show_startup_robot_wizard
-        )
-        self.btn_robot_config.pack(side=tk.LEFT, padx=(0, 12))
+        btn_calib.pack(side=tk.LEFT, padx=(0, 12))
 
         # Control WebCam
         tk.Label(top_bar, text="Cámara Web:", bg=COLOR_BG_PANEL, fg=COLOR_CYAN_ACCENT, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(6, 4))

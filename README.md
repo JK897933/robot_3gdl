@@ -75,7 +75,7 @@ Dado un punto objetivo $(X, Y, Z)$ en centímetros:
    * **Codo Arriba (*Elbow-Up*):** $\theta_2 = \beta + \psi,\quad \theta_3 = \theta_2 - \Delta\theta \implies q_2 = \theta_2,\quad q_3 = -\theta_3$
    * **Codo Abajo (*Elbow-Down*):** $\theta_2 = \beta - \psi,\quad \theta_3 = \theta_2 + \Delta\theta \implies q_2 = \theta_2,\quad q_3 = -\theta_3$
 
-### Límites Articulares Activos (`robot_config.json` — Perfil `Mi Robot Gato MK2`):
+### Límites Articulares Activos (`robot_config.json`):
 * **M1 (Base / Yaw):** $[-90.0^\circ, +90.0^\circ]$
 * **M2 (Hombro / Pitch):** $[-90.0^\circ, +90.0^\circ]$
 * **M3 (Codo / Pitch):** $[0.0^\circ, +90.0^\circ]$
@@ -91,7 +91,7 @@ La interfaz principal centraliza el control cartesiano por Cinemática Inversa, 
 ### 1. Panel Principal: Control Cartesiano (IK), Visión y Simulación 3D
 ![Interfaz Principal - Control Cartesiano y Simulación 3D](docs/gui_control_3d.png)
 
-* **Barra Superior y Homing:** Conexión serial con el ESP32-S3, selección de perfil (`Mi Robot Gato MK2`), control de WebCam, botón **`Home con Switches`** (secuencia `M3 → M2 → M1`) y **`MOTORES LIBRES`**.
+* **Barra Superior y Homing:** Conexión serial con el ESP32-S3, control de WebCam, botón **`Home con Switches`** (secuencia `M3 → M2 → M1`) y **`MOTORES LIBRES`**.
 * **Panel Izquierdo (Visión Artificial y Tablero 3x3):** Video en vivo con detección HSV de fichas `'X'` / `'O'`, tablero interactivo 3x3, marcador de partidas y disparo de turno por IA Minimax.
 * **Panel Central (Control Cartesiano IK y Simulación 3D):**
   * Ingreso directo de coordenadas `(X, Y, Z)` con **`Calcular IK y Mover`**, botones incrementales (*Jog*) en `X`, `Y` y `Z`, monitoreo en vivo de `Switches Home: M1[0] M2[0] M3[0]` y acceso directo a las **Casillas 1 a 9**.
