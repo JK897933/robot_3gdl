@@ -84,6 +84,29 @@ Dado un punto objetivo $(X, Y, Z)$ en centímetros:
 
 ---
 
+## 🖥️ Interfaz Gráfica Visual (`gui_robot_gato.py`)
+
+La interfaz principal centraliza el control cartesiano por Cinemática Inversa, la simulación 3D en tiempo real, la visión artificial y la configuración de seguridad del robot:
+
+### 1. Panel Principal: Control Cartesiano (IK), Visión y Simulación 3D
+![Interfaz Principal - Control Cartesiano y Simulación 3D](docs/gui_control_3d.png)
+
+* **Barra Superior y Homing:** Conexión serial con el ESP32-S3, selección de perfil (`Mi Robot Gato MK2`), control de WebCam, botón **`Home con Switches`** (secuencia `M3 → M2 → M1`) y **`MOTORES LIBRES`**.
+* **Panel Izquierdo (Visión Artificial y Tablero 3x3):** Video en vivo con detección HSV de fichas `'X'` / `'O'`, tablero interactivo 3x3, marcador de partidas y disparo de turno por IA Minimax.
+* **Panel Central (Control Cartesiano IK y Simulación 3D):**
+  * Ingreso directo de coordenadas `(X, Y, Z)` con **`Calcular IK y Mover`**, botones incrementales (*Jog*) en `X`, `Y` y `Z`, monitoreo en vivo de `Switches Home: M1[0] M2[0] M3[0]` y acceso directo a las **Casillas 1 a 9**.
+  * **Simulación 3D del Manipulador MK2:** Render interactivo rotatorio con vistas rápidas (`Perfil`, `Planta`, `Isométrica`, `Vista Usuario POV`), dispensadores `'O'`/`'X'` y **Radar 2D** superior.
+* **Panel Derecho (`Control & Gráfica`):** Control articular individual de `M1`, `M2` y `M3`, activación del electroimán (`Herramienta`) y botón de **`PARO DE EMERGENCIA`**.
+
+### 2. Pestaña de Seguridad: Límites Articulares, Backlash y Dinámica
+![Interfaz - Pestaña Límites y Backlash](docs/gui_limites_backlash.png)
+
+* **Límites de Seguridad Articular:** Ajuste en vivo de rangos seguros (`M1: [-90°, +90°]`, `M2: [-90°, +90°]`, `M3: [0°, +90°]`) con protección anticolisión M2–M3.
+* **Compensación Backlash (31:1):** Configuración independiente de vueltas extra `CW (+)` y `CCW (-)` por motor para absorber la holgura mecánica al invertir el sentido de giro.
+* **Torques Lagrange-Euler $G(q)$:** Cálculo en tiempo real del torque estático en cada articulación ($\tau_1, \tau_2, \tau_3$ en $\text{N}\cdot\text{m}$).
+
+---
+
 ## 📄 Manual Técnico en PDF
 Consulta el documento completo listo para imprimir en el repositorio:
 * 📄 **[Manual_Robot_3GDL_Gato.pdf](Manual_Robot_3GDL_Gato.pdf)**
