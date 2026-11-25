@@ -19,7 +19,7 @@ Desarrollado para la **Universidad Politécnica de Aguascalientes (UPA)**.
   * *Drivers:* `PUL=GPIO 15`, `DIR=GPIO 16`, `ENA=GPIO 17` | *Switch Home:* `GPIO 21`
 * **Motor 3 (M3 - Codo / Pitch):** Ubicado en el lateral opuesto de la base. Transmite su rotación al antebrazo ($a_3 = 32.934\text{ cm}$, ángulo $q_3$) mediante un **mecanismo de paralelogramo articulado de 4 barras** con varilla de empuje.
   * *Drivers:* `PUL=GPIO 12`, `DIR=GPIO 13`, `ENA=GPIO 14` | *Switch Home:* `GPIO 38`
-* **Herramienta / Gripper:** Electroimán de 12V gobernado mediante transistor/relé en `GPIO 7`.
+* **Herramienta / Pinza (Gripper):** Micro Servo **SG90** (PWM 50 Hz por LEDC en `GPIO 7`; `Café→GND`, `Rojo→5V`, `Naranja→GPIO 7`).
 
 ---
 
@@ -31,7 +31,7 @@ Desarrollado para la **Universidad Politécnica de Aguascalientes (UPA)**.
 | **Eje 1: Base (M1)** | **GPIO 4** | **GPIO 5** | **GPIO 6** | **GPIO 18** | GPTimer DDS 40 kHz (800 uSteps/rev) | GND Común ESP32 |
 | **Eje 2: Hombro (M2)** | **GPIO 15** | **GPIO 16** | **GPIO 17** | **GPIO 21** | GPTimer DDS 40 kHz (800 uSteps/rev) | GND Común ESP32 |
 | **Eje 3: Codo (M3)** | **GPIO 12** | **GPIO 13** | **GPIO 14** | **GPIO 38** | GPTimer DDS 40 kHz (800 uSteps/rev) | GND Común ESP32 |
-| **Gripper / Imán 12V** | **GPIO 7** | — | — | — | Salida Digital ON/OFF | GND Común ESP32 |
+| **Pinza Servo SG90** | **GPIO 7 (PWM 50Hz)** | — | — | — | LEDC Ch 0 (`10°` Abrir / `90°` Cerrar) | Café→GND, Rojo→5V |
 
 ### 2. Switches de Límite para Homing Automático (`SW_HOME`):
 Los microswitches mecánicos de **3 pines** (`COM`, `NO`, `NC`) se conectan usando únicamente **2 pines** (el pin **`NC` queda libre / sin conectar**):

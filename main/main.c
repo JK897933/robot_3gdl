@@ -1,5 +1,6 @@
 #include "driver/gpio.h"
 #include "driver/gptimer.h"
+#include "driver/ledc.h"
 #include "driver/uart.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -112,10 +113,15 @@ static void serial_printf(const char *fmt, ...) {
 #define M3_PIN_DIR GPIO_NUM_13
 #define M3_PIN_ENA GPIO_NUM_14
 
-// Efector Final: Gripper / Electroimán para Fichas del Gato
-// (Asignado a GPIO 7 libre en ESP32-S3 para no colisionar con M2_PIN_PUL GPIO
-// 15)
+// Efector Final: Pinza con Servo SG90 (PWM 50 Hz por LEDC en GPIO 7)
 #define PIN_TOOL_GRIPPER GPIO_NUM_7
+#define SERVO_LEDC_TIMER LEDC_TIMER_0
+#define SERVO_LEDC_MODE LEDC_LOW_SPEED_MODE
+#define SERVO_LEDC_CHANNEL LEDC_CHANNEL_0
+#define SERVO_LEDC_RES LEDC_TIMER_14_BIT
+#define SERVO_FREQ_HZ 50
+#define SERVO_ANGLE_OPEN_DEG 10.0f
+#define SERVO_ANGLE_CLOSE_DEG 90.0f
 
 // Switches de Límite para Homing (Activos en BAJO con Pull-Up interno a GND)
 #define SW_HOME_M1_IO GPIO_NUM_18
@@ -722,11 +728,56 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
 // 6. INICIALIZACIÓN DRIVERS TB6600 (LAZO ABIERTO GPTIMER 40 kHz + SWITCHES
 // HOME)
 // ==============================================================================
+static esp_err_t gripper_set_angle(float angle_deg) {
+  if (angle_deg < 0.0f) angle_deg = 0.0f;
+  if (angle_deg > 180.0f) angle_deg = 180.0f;
+  // SG90: 500 us (0 deg) a 2500 us (180 deg) en periodo de 20,000 us (50 Hz)
+  float pulse_us = 500.0f + (angle_deg / 180.0f) * 2000.0f;
+  uint32_t max_duty = (1U << 14) - 1;
+  uint32_t duty = (uint32_t)((pulse_us / 20000.0f) * (float)max_duty);
+  esp_err_t err = ledc_set_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL, duty);
+  if (err == ESP_OK) {
+    err = ledc_update_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL);
+  }
+  return err;
+}
+
+static void gripper_set_state(bool close_pinza) {
+  g_gripper_active = close_pinza;
+  gripper_set_angle(close_pinza ? SERVO_ANGLE_CLOSE_DEG : SERVO_ANGLE_OPEN_DEG);
+}
+
+static esp_err_t gripper_servo_init(void) {
+  ledc_timer_config_t timer_conf = {
+      .speed_mode = SERVO_LEDC_MODE,
+      .timer_num = SERVO_LEDC_TIMER,
+      .duty_resolution = SERVO_LEDC_RES,
+      .freq_hz = SERVO_FREQ_HZ,
+      .clk_cfg = LEDC_AUTO_CLK,
+  };
+  esp_err_t err = ledc_timer_config(&timer_conf);
+  if (err != ESP_OK) return err;
+
+  ledc_channel_config_t ch_conf = {
+      .gpio_num = PIN_TOOL_GRIPPER,
+      .speed_mode = SERVO_LEDC_MODE,
+      .channel = SERVO_LEDC_CHANNEL,
+      .intr_type = LEDC_INTR_DISABLE,
+      .timer_sel = SERVO_LEDC_TIMER,
+      .duty = 0,
+      .hpoint = 0,
+  };
+  err = ledc_channel_config(&ch_conf);
+  if (err != ESP_OK) return err;
+
+  gripper_set_state(false); // Iniciar con pinza abierta
+  return ESP_OK;
+}
+
 static esp_err_t steppers_hardware_init(void) {
   uint64_t pin_mask = (1ULL << M1_PIN_DIR) | (1ULL << M1_PIN_ENA) |
                       (1ULL << M2_PIN_DIR) | (1ULL << M2_PIN_ENA) |
-                      (1ULL << M3_PIN_DIR) | (1ULL << M3_PIN_ENA) |
-                      (1ULL << PIN_TOOL_GRIPPER);
+                      (1ULL << M3_PIN_DIR) | (1ULL << M3_PIN_ENA);
 
   gpio_config_t io_conf = {
       .pin_bit_mask = pin_mask,
@@ -749,7 +800,7 @@ static esp_err_t steppers_hardware_init(void) {
   gpio_set_level(M2_PIN_ENA, 0);
   gpio_set_level(M3_PIN_DIR, 0);
   gpio_set_level(M3_PIN_ENA, 0);
-  gpio_set_level(PIN_TOOL_GRIPPER, 0);
+  ESP_ERROR_CHECK(gripper_servo_init());
   for (int i = 0; i < NUM_MOTORS; i++) {
     g_ol_axis[i].dir_level = 0;
     g_ol_axis[i].run_dir = 0;
@@ -1373,9 +1424,8 @@ static void play_cell_sequence_task(void *pvParameters) {
   }
   vTaskDelay(pdMS_TO_TICKS(1000));
 
-  // 3. Activar Gripper / Electroimán
-  gpio_set_level(PIN_TOOL_GRIPPER, 1);
-  g_gripper_active = true;
+  // 3. Cerrar Pinza Servo SG90 para sujetar ficha
+  gripper_set_state(true);
   vTaskDelay(pdMS_TO_TICKS(500));
 
   // 4. Elevar ficha del dispensador (Pick Hover)
@@ -1404,9 +1454,8 @@ static void play_cell_sequence_task(void *pvParameters) {
   }
   vTaskDelay(pdMS_TO_TICKS(1000));
 
-  // 7. Liberar la ficha (Gripper OFF)
-  gpio_set_level(PIN_TOOL_GRIPPER, 0);
-  g_gripper_active = false;
+  // 7. Abrir Pinza Servo SG90 para liberar ficha
+  gripper_set_state(false);
   vTaskDelay(pdMS_TO_TICKS(500));
 
   // 8. Retraer a altura Hover para evitar colisiones con las fichas del tablero
@@ -1732,12 +1781,17 @@ void app_main(void) {
                       printf("$NACK,%d,ERR_CELL_OUT_OF_RANGE*00\r\n", seq);
                     }
 
-                    // 4. Control del Gripper / Electroimán
+                    // 4. Control de la Pinza Servo SG90 (0=Abrir, 1=Cerrar, >1=Ángulo 0..180°)
                   } else if (strcmp(cmd, "GRIPPER") == 0) {
-                    bool state = (p1 != 0.0f);
-                    gpio_set_level(PIN_TOOL_GRIPPER, state ? 1 : 0);
-                    g_gripper_active = state;
-                    printf("$ACK,%d,GRIPPER_OK,%d*00\r\n", seq, state ? 1 : 0);
+                    if (p1 > 1.5f) {
+                      g_gripper_active = true;
+                      gripper_set_angle(p1);
+                      printf("$ACK,%d,GRIPPER_OK,%.1f*00\r\n", seq, p1);
+                    } else {
+                      bool state = (p1 != 0.0f);
+                      gripper_set_state(state);
+                      printf("$ACK,%d,GRIPPER_OK,%d*00\r\n", seq, state ? 1 : 0);
+                    }
 
                     // 5. Paro de Emergencia Jerárquico (Individual o Global)
                   } else if (strcmp(cmd, "STOP") == 0 ||
@@ -2246,10 +2300,16 @@ void app_main(void) {
               }
               printf("Homing completado\r\nMovement completed\r\nACK:HOME\n");
             } else if (strncmp(rx_buf, "GRIPPER:", 8) == 0) {
-              int st = atoi(rx_buf + 8);
-              gpio_set_level(PIN_TOOL_GRIPPER, st ? 1 : 0);
-              g_gripper_active = (st != 0);
-              printf("ACK:GRIPPER=%d\n", st);
+              float val = (float)atof(rx_buf + 8);
+              if (val > 1.5f) {
+                g_gripper_active = true;
+                gripper_set_angle(val);
+                printf("ACK:GRIPPER_ANGLE=%.1f\n", val);
+              } else {
+                int st = (val != 0.0f) ? 1 : 0;
+                gripper_set_state(st != 0);
+                printf("ACK:GRIPPER=%d\n", st);
+              }
             } else if (strcmp(rx_buf, "STOP") == 0 ||
                        strcmp(rx_buf, "ESTOP") == 0) {
               if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
