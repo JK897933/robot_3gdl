@@ -84,6 +84,10 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 
+from board_detector import BoardDetector
+from piece_detector import PieceDetector
+from game_ai import EMPTY, GATO, RATON
+
 # Módulos opcionales con degradación elegante
 try:
     import cv2
@@ -514,13 +518,19 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.robot_score = 0
         self.draws_score = 0
 
-        # Visión Artificial por WebCam (OpenCV)
+        # Visión Artificial por WebCam (OpenCV - Captura-de-imagen)
         self.cap = None
         self.camera_running = False
         self.camera_thread = None
         self.current_frame = None
+        self.last_raw_bgr_frame = None
         self.last_detected_board = [0] * 9
         self.detection_stability_count = 0
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.board_detector = BoardDetector(warped_size=450, config_file=os.path.join(base_dir, "board_config.json"))
+        self.piece_detector = PieceDetector(config_file=os.path.join(base_dir, "piece_config.json"))
+        self.cam_calib_mode = None  # None, 'corners', 'color_G', 'color_R'
+        self.cam_manual_corners = []
 
         # Variables de la Cámara 3D Interactiva & Animación
         # Ajustado a la perspectiva física real del usuario en su mesa (laptop a la izq, robot a la der)
@@ -1017,9 +1027,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
     def camera_loop(self):
         """
-        Hilo en segundo plano para captura de fotogramas, segmentación HSV,
-        detección de regiones de interés (tablero y dispensadores) y
-        reconocimiento automático de tiradas del jugador humano.
+        Hilo en segundo plano usando BoardDetector (homografía 450x450) y
+        PieceDetector (HSV + morfología + estabilización temporal) de Captura-de-imagen.
         """
         while self.camera_running and self.cap and self.cap.isOpened():
             ret, frame = self.cap.read()
@@ -1027,95 +1036,101 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 time.sleep(0.03)
                 continue
 
-            frame = cv2.flip(frame, 1)  # Efecto espejo para mayor ergonomía visual
+            frame = cv2.flip(frame, 1)
+            self.last_raw_bgr_frame = frame.copy()
             h, w, _ = frame.shape
 
-            # Dimensiones del tablero central 3x3 y dispensadores
-            size = min(int(w * 0.58), h - 60)
-            rx1 = int((w - size) / 2)
-            ry1 = int((h - size) / 2)
-            rx2 = rx1 + size
-            ry2 = ry1 + size
+            if self.board_detector.corners is None:
+                self.board_detector.set_default_centered_roi(w, h, box_size=min(int(w * 0.58), h - 60))
 
-            # Borde del tablero central
-            cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (0, 245, 212), 2)
-            cv2.putText(frame, "TABLERO 3x3", (rx1 + 8, ry1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 245, 212), 1)
+            warped = self.board_detector.get_warped_board(frame)
+            if warped is not None:
+                _, stable_board = self.piece_detector.update_and_detect_board(warped)
+            else:
+                stable_board = [[EMPTY for _ in range(3)] for _ in range(3)]
 
-            # Dispensador izquierdo: Fichas 'O' (Robot / Círculos Azules)
-            dw = max(55, min(int(rx1 - 25), 85))
-            dh = int(size * 0.70)
-            dy1 = ry1 + (size - dh) // 2
-            dy2 = dy1 + dh
-            dl_x1 = max(10, rx1 - dw - 12)
-            dl_x2 = dl_x1 + dw
+            # Dibujar cuadrícula 3x3 proyectada por homografía
+            self.board_detector.draw_board_overlay(frame, color=(0, 245, 212), thickness=2)
 
-            cv2.rectangle(frame, (dl_x1, dy1), (dl_x2, dy2), (255, 200, 0), 2)
-            cv2.putText(frame, "DISP. 'O'", (dl_x1 + 4, dy1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 200, 0), 1)
-            cv2.circle(frame, (dl_x1 + dw // 2, dy1 + dh // 2), int(dw * 0.28), (255, 200, 0), 2)
-
-            # Dispensador derecho: Fichas 'X' (Humano / Cruces Rojas)
-            dr_x1 = rx2 + 12
-            dr_x2 = min(w - 10, dr_x1 + dw)
-
-            cv2.rectangle(frame, (dr_x1, dy1), (dr_x2, dy2), (0, 0, 255), 2)
-            cv2.putText(frame, "DISP. 'X'", (dr_x1 + 4, dy1 - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 255), 1)
-            dx_c = dr_x1 + (dr_x2 - dr_x1) // 2
-            dy_c = dy1 + dh // 2
-            arm_s = int(dw * 0.22)
-            cv2.line(frame, (dx_c - arm_s, dy_c - arm_s), (dx_c + arm_s, dy_c + arm_s), (0, 0, 255), 2)
-            cv2.line(frame, (dx_c - arm_s, dy_c + arm_s), (dx_c + arm_s, dy_c - arm_s), (0, 0, 255), 2)
-
-            cell_size = size // 3
             detected_cells = [0] * 9
+            for r in range(3):
+                for c in range(3):
+                    idx = r * 3 + c
+                    piece = stable_board[r][c]
+                    quad = self.board_detector.get_cell_quad_in_frame(r, c)
+                    cx = int(np.mean(quad[:, 0, 0]))
+                    cy = int(np.mean(quad[:, 0, 1]))
+                    if piece == GATO:  # Rojo -> 'X' Humano
+                        detected_cells[idx] = 1
+                        cv2.putText(frame, "X", (cx - 12, cy + 12), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 255), 3)
+                    elif piece == RATON:  # Azul -> 'O' Robot
+                        detected_cells[idx] = 2
+                        cv2.putText(frame, "O", (cx - 12, cy + 12), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (255, 200, 0), 3)
+                    else:
+                        cv2.putText(frame, f"{idx+1}", (cx - 8, cy + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
 
-            for i in range(3):
-                for j in range(3):
-                    idx = i * 3 + j
-                    cx1 = rx1 + j * cell_size
-                    cy1 = ry1 + i * cell_size
-                    cx2 = cx1 + cell_size
-                    cy2 = cy1 + cell_size
+            # Dibujar puntos si está en calibración manual de 4 esquinas
+            for i_pt, pt in enumerate(self.cam_manual_corners):
+                cv2.circle(frame, (int(pt[0]), int(pt[1])), 6, (0, 255, 255), -1)
+                cv2.putText(frame, f"E{i_pt+1}", (int(pt[0]) + 8, int(pt[1]) - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-                    cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), (60, 60, 60), 1)
-                    roi = frame[cy1 + 8:cy2 - 8, cx1 + 8:cx2 - 8]
-                    if roi.size > 0:
-                        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                        # Segmentación de Rojo ('X' Humano)
-                        m_red1 = cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 255]))
-                        m_red2 = cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 255]))
-                        red_px = cv2.countNonZero(m_red1 | m_red2)
-                        # Segmentación de Azul/Cyan ('O' Robot)
-                        m_blue = cv2.inRange(hsv, np.array([90, 70, 50]), np.array([130, 255, 255]))
-                        blue_px = cv2.countNonZero(m_blue)
-
-                        if red_px > 400:
-                            detected_cells[idx] = 1
-                            cv2.putText(frame, "X", (cx1 + cell_size//3, cy1 + 2*cell_size//3),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                        elif blue_px > 400:
-                            detected_cells[idx] = 2
-                            cv2.putText(frame, "O", (cx1 + cell_size//3, cy1 + 2*cell_size//3),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 200, 0), 3)
-                        else:
-                            cv2.putText(frame, f"{idx+1}", (cx1 + 8, cy1 + 18),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (160, 160, 160), 1)
-
-            # Filtro de estabilidad temporal para detección automática de jugada humana
+            # Disparo automático de jugada humana cuando stable_board confirma 'X' (GATO)
             if self.chk_auto_vision_var.get() and self.game_active and self.turn == "HUMANO":
-                if detected_cells == self.last_detected_board:
-                    self.detection_stability_count += 1
-                    if self.detection_stability_count == 7:
-                        for k in range(9):
-                            if detected_cells[k] == 1 and self.board[k] == 0:
-                                self.after(0, lambda pos=k: self.on_cell_clicked(pos))
-                                break
-                else:
-                    self.last_detected_board = list(detected_cells)
-                    self.detection_stability_count = 0
+                for k in range(9):
+                    if detected_cells[k] == 1 and self.board[k] == 0:
+                        self.after(0, lambda pos=k: self.on_cell_clicked(pos))
+                        break
 
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             self.current_frame = rgb
             time.sleep(0.03)
+
+    def cam_auto_detect_board(self):
+        if self.last_raw_bgr_frame is None:
+            messagebox.showinfo("Cámara", "Inicia el video primero para detectar el tablero.")
+            return
+        if self.board_detector.auto_detect_board(self.last_raw_bgr_frame):
+            self.board_detector.save_config()
+            self.lbl_vision_info.config(text="Tablero detectado y guardado (board_config.json).", fg=COLOR_GREEN_SUCCESS)
+        else:
+            self.lbl_vision_info.config(text="No se detectó contorno cuadrado; usa '4 Esquinas'.", fg=COLOR_AMBER_WARN)
+
+    def cam_start_corners_calib(self):
+        self.cam_calib_mode = "corners"
+        self.cam_manual_corners = []
+        self.lbl_vision_info.config(text="Haz clic en las 4 esquinas del tablero en el video.", fg=COLOR_CYAN_ACCENT)
+
+    def cam_start_color_calib(self, piece_type):
+        self.cam_calib_mode = f"color_{piece_type}"
+        nombre = "Rojo ('X')" if piece_type == GATO else "Azul ('O')"
+        self.lbl_vision_info.config(text=f"Haz clic sobre una ficha {nombre} en el video.", fg=COLOR_CYAN_ACCENT)
+
+    def on_cam_canvas_click(self, event):
+        if not self.camera_running or self.last_raw_bgr_frame is None or self.cam_calib_mode is None:
+            return
+        cw = max(1, self.canvas_cam.winfo_width())
+        ch = max(1, self.canvas_cam.winfo_height())
+        fh, fw = self.last_raw_bgr_frame.shape[:2]
+        fx = int(event.x * fw / cw)
+        fy = int(event.y * fh / ch)
+
+        if self.cam_calib_mode == "corners":
+            self.cam_manual_corners.append([fx, fy])
+            if len(self.cam_manual_corners) >= 4:
+                self.board_detector.set_corners(np.array(self.cam_manual_corners[:4], dtype="float32"))
+                self.board_detector.save_config()
+                self.cam_calib_mode = None
+                self.cam_manual_corners = []
+                self.lbl_vision_info.config(text="4 esquinas guardadas en board_config.json.", fg=COLOR_GREEN_SUCCESS)
+            else:
+                self.lbl_vision_info.config(text=f"Esquina {len(self.cam_manual_corners)}/4 marcada...", fg=COLOR_CYAN_ACCENT)
+        elif self.cam_calib_mode in (f"color_{GATO}", f"color_{RATON}"):
+            ptype = GATO if self.cam_calib_mode.endswith(GATO) else RATON
+            hsv = cv2.cvtColor(self.last_raw_bgr_frame, cv2.COLOR_BGR2HSV)
+            self.piece_detector.calibrate_color_at_point(hsv, fx, fy, ptype)
+            self.cam_calib_mode = None
+            nombre = "Rojo ('X')" if ptype == GATO else "Azul ('O')"
+            self.lbl_vision_info.config(text=f"Color {nombre} calibrado en piece_config.json.", fg=COLOR_GREEN_SUCCESS)
 
     def update_video_canvas(self):
         """Actualiza el widget Canvas de Tkinter con el fotograma RGB actual."""
@@ -2809,8 +2824,20 @@ class Robot3GDLGatoVisionController(tk.Tk):
 
         tk.Label(p_left, text="Visión Artificial (WebCam)", bg=COLOR_BG_PANEL, fg=COLOR_CYAN_ACCENT, font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
 
-        self.canvas_cam = tk.Canvas(p_left, bg="#05070a", width=386, height=270, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
-        self.canvas_cam.pack(pady=6)
+        self.canvas_cam = tk.Canvas(p_left, bg="#05070a", width=386, height=250, highlightthickness=1, highlightbackground=COLOR_BORDER_FOCUS)
+        self.canvas_cam.pack(pady=(6, 4))
+        self.canvas_cam.bind("<Button-1>", self.on_cam_canvas_click)
+
+        cam_tools = tk.Frame(p_left, bg=COLOR_BG_PANEL)
+        cam_tools.pack(fill=tk.X, pady=(0, 4))
+        tk.Button(cam_tools, text="Auto Tablero", bg="#0284c7", fg="#ffffff", font=("Segoe UI", 7, "bold"),
+                  padx=6, pady=2, bd=0, cursor="hand2", command=self.cam_auto_detect_board).pack(side=tk.LEFT, padx=(0, 3))
+        tk.Button(cam_tools, text="4 Esquinas", bg="#475569", fg="#ffffff", font=("Segoe UI", 7, "bold"),
+                  padx=6, pady=2, bd=0, cursor="hand2", command=self.cam_start_corners_calib).pack(side=tk.LEFT, padx=3)
+        tk.Button(cam_tools, text="Calibrar 'X'", bg="#dc2626", fg="#ffffff", font=("Segoe UI", 7, "bold"),
+                  padx=6, pady=2, bd=0, cursor="hand2", command=lambda: self.cam_start_color_calib(GATO)).pack(side=tk.LEFT, padx=3)
+        tk.Button(cam_tools, text="Calibrar 'O'", bg="#1d4ed8", fg="#ffffff", font=("Segoe UI", 7, "bold"),
+                  padx=6, pady=2, bd=0, cursor="hand2", command=lambda: self.cam_start_color_calib(RATON)).pack(side=tk.LEFT, padx=3)
 
         self.lbl_vision_info = tk.Label(p_left, text="Visión: En espera...", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8))
         self.lbl_vision_info.pack(anchor=tk.W, pady=(0, 6))

@@ -4,6 +4,7 @@ Permite probar la detección HSV de piezas ('X' roja / 'O' azul) en el tablero 3
 el filtro de estabilidad temporal y la respuesta de la IA (Minimax) sin usar el ESP32.
 """
 
+import os
 import sys
 import time
 import threading
@@ -13,6 +14,10 @@ from tkinter import ttk, messagebox
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
+
+from board_detector import BoardDetector
+from piece_detector import PieceDetector
+from game_ai import EMPTY, GATO, RATON
 
 
 def check_winner(board, player):
@@ -71,6 +76,10 @@ class CameraGatoTester(tk.Tk):
         self.turn = "HUMANO"
         self.last_detected_board = [0] * 9
         self.detection_stability_count = 0
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.board_detector = BoardDetector(warped_size=450, config_file=os.path.join(base_dir, "board_config.json"))
+        self.piece_detector = PieceDetector(config_file=os.path.join(base_dir, "piece_config.json"))
 
         self.var_auto_vision = tk.BooleanVar(value=True)
         self.var_flip = tk.BooleanVar(value=True)
@@ -217,63 +226,39 @@ class CameraGatoTester(tk.Tk):
                 frame = cv2.flip(frame, 1)
 
             h, w, _ = frame.shape
-            size = min(int(w * 0.62), h - 40)
-            rx1 = (w - size) // 2
-            ry1 = (h - size) // 2
-            rx2 = rx1 + size
-            ry2 = ry1 + size
+            if self.board_detector.corners is None:
+                self.board_detector.set_default_centered_roi(w, h, box_size=min(int(w * 0.62), h - 40))
 
-            cv2.rectangle(frame, (rx1, ry1), (rx2, ry2), (0, 245, 212), 2)
-            cv2.putText(frame, "TABLERO 3x3", (rx1 + 6, max(20, ry1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 245, 212), 2)
+            warped = self.board_detector.get_warped_board(frame)
+            if warped is not None:
+                _, stable_board = self.piece_detector.update_and_detect_board(warped)
+            else:
+                stable_board = [[EMPTY for _ in range(3)] for _ in range(3)]
 
-            cell_size = size // 3
+            self.board_detector.draw_board_overlay(frame, color=(0, 245, 212), thickness=2)
+
             detected = [0] * 9
-            thresh = self.var_px_thresh.get()
-
             for r in range(3):
                 for c in range(3):
                     idx = r * 3 + c
-                    cx1 = rx1 + c * cell_size
-                    cy1 = ry1 + r * cell_size
-                    cx2 = cx1 + cell_size
-                    cy2 = cy1 + cell_size
-                    cv2.rectangle(frame, (cx1, cy1), (cx2, cy2), (80, 80, 80), 1)
-
-                    roi = frame[cy1 + 8:cy2 - 8, cx1 + 8:cx2 - 8]
-                    red_px = 0
-                    blue_px = 0
-                    if roi.size > 0:
-                        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-                        m_red1 = cv2.inRange(hsv, np.array([0, 70, 50]), np.array([10, 255, 255]))
-                        m_red2 = cv2.inRange(hsv, np.array([170, 70, 50]), np.array([180, 255, 255]))
-                        red_px = cv2.countNonZero(m_red1 | m_red2)
-
-                        m_blue = cv2.inRange(hsv, np.array([90, 70, 50]), np.array([130, 255, 255]))
-                        blue_px = cv2.countNonZero(m_blue)
-
-                    if red_px > thresh:
+                    piece = stable_board[r][c]
+                    quad = self.board_detector.get_cell_quad_in_frame(r, c)
+                    cx = int(np.mean(quad[:, 0, 0]))
+                    cy = int(np.mean(quad[:, 0, 1]))
+                    if piece == GATO:
                         detected[idx] = 1
-                        cv2.putText(frame, f"X ({red_px})", (cx1 + 10, cy1 + cell_size // 2),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-                    elif blue_px > thresh:
+                        cv2.putText(frame, "X", (cx - 12, cy + 12), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 3)
+                    elif piece == RATON:
                         detected[idx] = 2
-                        cv2.putText(frame, f"O ({blue_px})", (cx1 + 10, cy1 + cell_size // 2),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 200, 0), 2)
+                        cv2.putText(frame, "O", (cx - 12, cy + 12), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 200, 0), 3)
                     else:
-                        cv2.putText(frame, f"{idx+1} R:{red_px} B:{blue_px}", (cx1 + 6, cy1 + 18),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.36, (180, 180, 180), 1)
+                        cv2.putText(frame, f"{idx+1}", (cx - 6, cy + 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
 
             if self.var_auto_vision.get() and self.game_active and self.turn == "HUMANO":
-                if detected == self.last_detected_board:
-                    self.detection_stability_count += 1
-                    if self.detection_stability_count == 7:
-                        for k in range(9):
-                            if detected[k] == 1 and self.board[k] == 0:
-                                self.after(0, lambda pos=k: self.on_human_move(pos, source="CÁMARA"))
-                                break
-                else:
-                    self.last_detected_board = list(detected)
-                    self.detection_stability_count = 0
+                for k in range(9):
+                    if detected[k] == 1 and self.board[k] == 0:
+                        self.after(0, lambda pos=k: self.on_human_move(pos, source="CÁMARA"))
+                        break
 
             self.current_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             time.sleep(0.03)
@@ -344,6 +329,10 @@ class CameraGatoTester(tk.Tk):
         self.turn = "HUMANO"
         self.last_detected_board = [0] * 9
         self.detection_stability_count = 0
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.board_detector = BoardDetector(warped_size=450, config_file=os.path.join(base_dir, "board_config.json"))
+        self.piece_detector = PieceDetector(config_file=os.path.join(base_dir, "piece_config.json"))
         for idx, btn in enumerate(self.cell_buttons):
             btn.config(text=f"{idx+1}", fg="#64748b", bg="#1e293b")
         self.lbl_turn.config(text="● TU TURNO (X - Rojo)", fg="#22c55e")

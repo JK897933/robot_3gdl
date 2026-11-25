@@ -107,17 +107,17 @@ La interfaz principal centraliza el control cartesiano por Cinemática Inversa, 
 
 ---
 
-## 📷 Sistema de Visión Artificial por Cámara (`test_camara_gato.py`)
+## 📷 Sistema de Visión Artificial por Cámara (`Captura-de-imagen`)
 
-El módulo de visión permite detectar automáticamente el estado del tablero 3x3 mediante una WebCam cenital sin depender del robot para pruebas:
+El sistema integra los módulos de visión de [`pame18lopez/Captura-de-imagen`](https://github.com/pame18lopez/Captura-de-imagen) (`board_detector.py`, `piece_detector.py`, `board_config.json`, `piece_config.json`):
 
 ![Test de Cámara y Lógica del Gato](docs/gui_test_camara.png)
 
-* **Segmentación por Color en Espacio HSV:**
-  * **Fichas Humano (`'X'` - Rojo):** Rangos $H \in [0, 10] \cup [170, 180]$, $S \ge 70$, $V \ge 50$.
-  * **Fichas Robot (`'O'` - Azul):** Rango $H \in [90, 130]$, $S \ge 70$, $V \ge 50$.
-* **Filtro de Estabilidad y Umbral:** El deslizador **`Umbral px`** (por defecto `400 px`) define la cantidad mínima de píxeles de color por casilla, y el filtro temporal evita falsas detecciones mientras se coloca la ficha con la mano.
-* **Controles:** **`Auto-Detectar Turno`** dispara la respuesta de la IA **Minimax** al confirmar una nueva ficha `'X'`, y **`Espejo (Flip)`** invierte horizontalmente la imagen para coincidir con la vista del usuario.
+* **Detección de Tablero por Homografía (`BoardDetector`):** Corrige la perspectiva de la cámara hacia una vista superior plana de `450x450` px (`Auto Tablero` por contornos o calibración manual de **`4 Esquinas`** guardada en `board_config.json`).
+* **Segmentación HSV + Morfología (`PieceDetector`):**
+  * **Fichas Humano (`'X'` / Gato - Rojo):** Rangos `H ∈ [0, 10] ∪ [168, 180]`, `S ≥ 80`, `V ≥ 50`.
+  * **Fichas Robot (`'O'` / Ratón - Azul):** Rango `H ∈ [95, 135]`, `S ≥ 70`, `V ≥ 50`.
+  * Incluye limpieza morfológica (`MORPH_OPEN` + `MORPH_DILATE`), umbral de ocupación del `7.5%` del área de la casilla, buffer temporal de estabilidad (`6` de `8` cuadros) y calibración de color por clic (**`Calibrar 'X'`** / **`Calibrar 'O'`** en `piece_config.json`).
 
 ---
 

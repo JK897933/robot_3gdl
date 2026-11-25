@@ -1,0 +1,16 @@
+{
+    "R": {
+        "name": "Ratón (Azul / O)",
+        "lower": [95, 70, 50],
+        "upper": [135, 255, 255],
+        "lower2": null,
+        "upper2": null
+    },
+    "G": {
+        "name": "Gato (Rojo / X)",
+        "lower": [0, 80, 50],
+        "upper": [10, 255, 255],
+        "lower2": [168, 80, 50],
+        "upper2": [180, 255, 255]
+    }
+}
