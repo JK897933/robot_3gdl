@@ -35,6 +35,9 @@ Desarrollado para la **Universidad Politécnica de Aguascalientes (UPA)**.
 
 ### 2. Switches de Límite para Homing Automático (`SW_HOME`):
 Los microswitches mecánicos de **3 pines** (`COM`, `NO`, `NC`) se conectan usando únicamente **2 pines** (el pin **`NC` queda libre / sin conectar**):
+
+![Conexión Switch de 3 Pines (COM + NO)](docs/switch_3_pines_conexion.png)
+
 * **`COM` (Común)** → **`GND`** de la ESP32-S3
 * **`NO` (Normalmente Abierto)** → **`GPIO`** correspondiente (`Pull-Up` interno, activo en BAJO `0V` al presionar)
 * **`NC` (Normalmente Cerrado)** → **Sin conectar**
