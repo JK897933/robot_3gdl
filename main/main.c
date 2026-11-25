@@ -1133,57 +1133,125 @@ static void homing_sequence_task(void *pvParameters) {
   for (int idx = 0; idx < NUM_MOTORS; idx++) {
     int i = order[idx];
     ol_axis_t *a = &g_ol_axis[i];
-    int32_t steps_deg = (int32_t)lroundf(ol_steps_per_deg(i));
+    float spd_per_deg = ol_steps_per_deg(i);
 
-    // 1. Si el switch no está presionado, avanzar hacia negativo (CCW, run_dir = 0)
-    if (!limit_switch_is_pressed(i)) {
-      a->run_dir = 0;
-      a->target = a->pos - (int32_t)(360.0f * ol_steps_per_deg(i));
-      a->speed_hz = 450;
+    if (i == 0) {
+      // M1 (Base circular): barrido oscilatorio creciente Izq (-10°) / Der (+10°),
+      // sumando 10° en cada ciclo (±10°, ±20°, ±30°... hasta ±180°) hasta tocar el switch.
+      bool found = limit_switch_is_pressed(0);
+      int hit_dir = 0;
+      int32_t center_pos = a->pos;
 
-      int debounce = 0;
-      int timeout_ms = 25000;
-      while (timeout_ms > 0) {
-        if (limit_switch_is_pressed(i)) {
-          debounce++;
-          if (debounce >= 3) break;
-        } else {
-          debounce = 0;
+      for (float amp_deg = 10.0f; !found && amp_deg <= 180.0f; amp_deg += 10.0f) {
+        const int dirs[2] = {0, 1}; // 0 = Izquierda (-), 1 = Derecha (+)
+        for (int d_idx = 0; d_idx < 2 && !found; d_idx++) {
+          int dir = dirs[d_idx];
+          int32_t offset = (int32_t)lroundf(amp_deg * spd_per_deg);
+          a->run_dir = dir;
+          a->target = (dir == 0) ? (center_pos - offset) : (center_pos + offset);
+          a->speed_hz = 600;
+
+          int debounce = 0;
+          int seg_timeout_ms = 12000;
+          while (seg_timeout_ms > 0) {
+            if (limit_switch_is_pressed(0)) {
+              debounce++;
+              if (debounce >= 3) {
+                found = true;
+                hit_dir = dir;
+                break;
+              }
+            } else {
+              debounce = 0;
+            }
+            if (dir ? (a->pos >= a->target) : (a->pos <= a->target)) {
+              break; // Llegó al extremo de este barrido
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
+            seg_timeout_ms -= 5;
+          }
+          a->speed_hz = 0;
+          vTaskDelay(pdMS_TO_TICKS(50));
         }
-        vTaskDelay(pdMS_TO_TICKS(5));
-        timeout_ms -= 5;
       }
-      a->speed_hz = 0;
-      vTaskDelay(pdMS_TO_TICKS(60));
 
-      if (timeout_ms <= 0) {
-        ESP_LOGE(TAG, "Timeout en Homing de M%d: switch GPIO %d no detectado.", i + 1, g_home_sw_pins[i]);
-        printf("$ALARM,HOMING_TIMEOUT,M%d*00\r\n", i + 1);
+      if (!found) {
+        ESP_LOGE(TAG, "Timeout en Homing oscilatorio de M1: switch GPIO %d no detectado.", g_home_sw_pins[0]);
+        printf("$ALARM,HOMING_TIMEOUT,M1*00\r\n");
         all_ok = false;
         break;
       }
+
+      // Retroceder ligeramente en sentido contrario al que tocó el switch hasta liberar + 1.5°
+      int back_dir = (hit_dir == 0) ? 1 : 0;
+      a->run_dir = back_dir;
+      int32_t back_5 = (int32_t)lroundf(5.0f * spd_per_deg);
+      a->target = back_dir ? (a->pos + back_5) : (a->pos - back_5);
+      a->speed_hz = 250;
+      int release_ms = 3000;
+      while (release_ms > 0 && limit_switch_is_pressed(0)) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        release_ms -= 5;
+      }
+      int32_t extra_1_5 = (int32_t)lroundf(1.5f * spd_per_deg);
+      a->target = back_dir ? (a->pos + extra_1_5) : (a->pos - extra_1_5);
+      int extra_ms = 600;
+      while (extra_ms > 0 && (back_dir ? (a->pos < a->target) : (a->pos > a->target))) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        extra_ms -= 5;
+      }
+      a->speed_hz = 0;
+      vTaskDelay(pdMS_TO_TICKS(60));
+    } else {
+      // M3 (Codo) y M2 (Hombro): mover hacia atrás (CCW, run_dir = 0) hasta presionar el switch
+      if (!limit_switch_is_pressed(i)) {
+        a->run_dir = 0;
+        a->target = a->pos - (int32_t)(360.0f * spd_per_deg);
+        a->speed_hz = 450;
+
+        int debounce = 0;
+        int timeout_ms = 25000;
+        while (timeout_ms > 0) {
+          if (limit_switch_is_pressed(i)) {
+            debounce++;
+            if (debounce >= 3) break;
+          } else {
+            debounce = 0;
+          }
+          vTaskDelay(pdMS_TO_TICKS(5));
+          timeout_ms -= 5;
+        }
+        a->speed_hz = 0;
+        vTaskDelay(pdMS_TO_TICKS(60));
+
+        if (timeout_ms <= 0) {
+          ESP_LOGE(TAG, "Timeout en Homing de M%d: switch GPIO %d no detectado.", i + 1, g_home_sw_pins[i]);
+          printf("$ALARM,HOMING_TIMEOUT,M%d*00\r\n", i + 1);
+          all_ok = false;
+          break;
+        }
+      }
+
+      // Retroceder ligeramente en sentido positivo (CW, run_dir = 1) hasta liberar + 1.5°
+      a->run_dir = 1;
+      a->target = a->pos + (int32_t)(5.0f * spd_per_deg);
+      a->speed_hz = 250;
+      int release_ms = 3000;
+      while (release_ms > 0 && limit_switch_is_pressed(i)) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        release_ms -= 5;
+      }
+      a->target = a->pos + (int32_t)(1.5f * spd_per_deg);
+      int extra_ms = 600;
+      while (extra_ms > 0 && a->pos < a->target) {
+        vTaskDelay(pdMS_TO_TICKS(5));
+        extra_ms -= 5;
+      }
+      a->speed_hz = 0;
+      vTaskDelay(pdMS_TO_TICKS(60));
     }
 
-    // 2. Retroceder ligeramente en sentido positivo (CW, run_dir = 1) hasta liberar + 1.5°
-    a->run_dir = 1;
-    a->target = a->pos + (int32_t)(5.0f * ol_steps_per_deg(i));
-    a->speed_hz = 250;
-    int release_ms = 3000;
-    while (release_ms > 0 && limit_switch_is_pressed(i)) {
-      vTaskDelay(pdMS_TO_TICKS(5));
-      release_ms -= 5;
-    }
-    // Avanzar ~1.5° extra después de liberar el switch
-    a->target = a->pos + (int32_t)(1.5f * ol_steps_per_deg(i));
-    int extra_ms = 600;
-    while (extra_ms > 0 && a->pos < a->target) {
-      vTaskDelay(pdMS_TO_TICKS(5));
-      extra_ms -= 5;
-    }
-    a->speed_hz = 0;
-    vTaskDelay(pdMS_TO_TICKS(60));
-
-    // 3. Establecer 0.0° en micropasos y también en lectura informativa AS5600
+    // Establecer 0.0° en micropasos y también en lectura informativa AS5600
     ol_set_zero(i);
     if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       g_target_deg[i] = 0.0f;
@@ -1193,7 +1261,6 @@ static void homing_sequence_task(void *pvParameters) {
       as5600_reset_zero_calibration(i);
       xSemaphoreGive(g_data_mutex);
     }
-    (void)steps_deg;
     ESP_LOGI(TAG, "Homing M%d completado y fijado en 0.00°.", i + 1);
   }
 
@@ -1432,8 +1499,14 @@ void app_main(void) {
   uart_param_config(UART_NUM_0, &uart_config);
   uart_driver_install(UART_NUM_0, 1024, 0, 0, NULL, 0);
 
-  // 5. Tarea de Control en Core 1 a 50 Hz
+  // 5. Tarea de Control en Core 1 a 100 Hz
   xTaskCreatePinnedToCore(steppers_control_task, "steppers_ctrl", 4096, NULL, 5,
+                          NULL, 1);
+
+  // 6. Auto-Homing al conectar/encender el ESP32:
+  //    M3 y M2 retroceden hacia atrás hasta su switch; M1 oscila ±10°, ±20°, ±30°... hasta su switch.
+  vTaskDelay(pdMS_TO_TICKS(300));
+  xTaskCreatePinnedToCore(homing_sequence_task, "homing_boot", 4096, NULL, 6,
                           NULL, 1);
 
   char rx_buf[128];
