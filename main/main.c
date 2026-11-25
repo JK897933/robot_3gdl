@@ -212,7 +212,8 @@ static bool g_gripper_active = false;
 static SemaphoreHandle_t g_data_mutex = NULL;
 
 // ==============================================================================
-// 4b. CONTROL EN LAZO ABIERTO POR MICROPASOS (GPTimer 40 kHz) + HOMING CON SWITCHES
+// 4b. CONTROL EN LAZO ABIERTO POR MICROPASOS (GPTimer 40 kHz) + HOMING CON
+// SWITCHES
 // ------------------------------------------------------------------------------
 // Los encoders AS5600 se leen únicamente para telemetría/información (no PID).
 // La posición de cada eje se controla por conteo exacto de micropasos (DDS).
@@ -233,18 +234,22 @@ typedef struct {
   int dir_level;
 } ol_axis_t;
 
-static ol_axis_t g_ol_axis[NUM_MOTORS] = {
-    {.run_dir = 1, .dir_level = -1},
-    {.run_dir = 1, .dir_level = -1},
-    {.run_dir = 1, .dir_level = -1}};
+static ol_axis_t g_ol_axis[NUM_MOTORS] = {{.run_dir = 1, .dir_level = -1},
+                                          {.run_dir = 1, .dir_level = -1},
+                                          {.run_dir = 1, .dir_level = -1}};
 static gptimer_handle_t g_ol_timer = NULL;
-static const gpio_num_t g_ol_pul_pins[NUM_MOTORS] = {M1_PIN_PUL, M2_PIN_PUL, M3_PIN_PUL};
-static const gpio_num_t g_ol_dir_pins[NUM_MOTORS] = {M1_PIN_DIR, M2_PIN_DIR, M3_PIN_DIR};
-static const gpio_num_t g_home_sw_pins[NUM_MOTORS] = {SW_HOME_M1_IO, SW_HOME_M2_IO, SW_HOME_M3_IO};
+static const gpio_num_t g_ol_pul_pins[NUM_MOTORS] = {M1_PIN_PUL, M2_PIN_PUL,
+                                                     M3_PIN_PUL};
+static const gpio_num_t g_ol_dir_pins[NUM_MOTORS] = {M1_PIN_DIR, M2_PIN_DIR,
+                                                     M3_PIN_DIR};
+static const gpio_num_t g_home_sw_pins[NUM_MOTORS] = {
+    SW_HOME_M1_IO, SW_HOME_M2_IO, SW_HOME_M3_IO};
 static volatile bool g_homing_active = false;
 
 static inline float ol_steps_per_deg(int i) {
-  float ratio = (i >= 0 && i < NUM_MOTORS && g_gear_ratio[i] > 0.001f) ? g_gear_ratio[i] : GEAR_RATIO_CYCLOIDAL;
+  float ratio = (i >= 0 && i < NUM_MOTORS && g_gear_ratio[i] > 0.001f)
+                    ? g_gear_ratio[i]
+                    : GEAR_RATIO_CYCLOIDAL;
   return (STEPPER_MICROSTEPS_PER_REV * ratio) / 360.0f;
 }
 
@@ -253,11 +258,15 @@ static inline float ol_pos_deg(int i) {
 }
 
 static inline bool limit_switch_is_pressed(int motor_idx) {
-  if (motor_idx < 0 || motor_idx >= NUM_MOTORS) return false;
-  return gpio_get_level(g_home_sw_pins[motor_idx]) == 0; // Activo en bajo (Pull-Up a GND)
+  if (motor_idx < 0 || motor_idx >= NUM_MOTORS)
+    return false;
+  return gpio_get_level(g_home_sw_pins[motor_idx]) ==
+         0; // Activo en bajo (Pull-Up a GND)
 }
 
-static bool IRAM_ATTR ol_step_isr(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx) {
+static bool IRAM_ATTR ol_step_isr(gptimer_handle_t timer,
+                                  const gptimer_alarm_event_data_t *edata,
+                                  void *user_ctx) {
   for (int i = 0; i < NUM_MOTORS; i++) {
     ol_axis_t *a = &g_ol_axis[i];
     if (a->zero_req) {
@@ -293,7 +302,8 @@ static bool IRAM_ATTR ol_step_isr(gptimer_handle_t timer, const gptimer_alarm_ev
     if (dir ? (pos >= tgt) : (pos <= tgt)) {
       continue;
     }
-    if (spd > OL_MAX_STEP_HZ) spd = OL_MAX_STEP_HZ;
+    if (spd > OL_MAX_STEP_HZ)
+      spd = OL_MAX_STEP_HZ;
     a->phase += spd;
     if (a->phase >= OL_TICK_HZ) {
       a->phase -= OL_TICK_HZ;
@@ -306,7 +316,8 @@ static bool IRAM_ATTR ol_step_isr(gptimer_handle_t timer, const gptimer_alarm_ev
 }
 
 static void ol_set_zero(int i) {
-  if (i < 0 || i >= NUM_MOTORS) return;
+  if (i < 0 || i >= NUM_MOTORS)
+    return;
   g_ol_axis[i].speed_hz = 0;
   g_ol_axis[i].zero_req = true;
   for (int k = 0; k < 200 && g_ol_axis[i].zero_req; k++) {
@@ -320,8 +331,8 @@ static void ol_set_zero(int i) {
   }
 }
 
-// Posiciones calculadas para el Tablero de 3x3 del Gato (J1, J2, J3) en Z=-29.1 cm (mesa)
-// Adaptadas estrictamente a M1 [-60, 60], M2 [-60, 60], M3 [0, 45]:
+// Posiciones calculadas para el Tablero de 3x3 del Gato (J1, J2, J3) en Z=-29.1
+// cm (mesa) Adaptadas estrictamente a M1 [-60, 60], M2 [-60, 60], M3 [0, 45]:
 static robot_pose_t g_cell_poses[NUM_CELLS] = {
     {3.42f, -34.87f, 0.00f},   // Casilla 1 (Fila 1, Col 1)
     {0.00f, -34.92f, 0.00f},   // Casilla 2 (Fila 1, Col 2)
@@ -348,7 +359,8 @@ static robot_pose_t g_cell_hover_poses[NUM_CELLS] = {
 };
 
 static robot_pose_t g_home_pose = {0.0f, 0.0f, 0.0f};
-static robot_pose_t g_pick_pose = {-14.47f, -36.40f, 0.00f}; // Dispensador de Fichas
+static robot_pose_t g_pick_pose = {-14.47f, -36.40f,
+                                   0.00f}; // Dispensador de Fichas
 
 // Mapeo de pines para los 3 buses I2C dedicados
 typedef struct {
@@ -565,9 +577,8 @@ static void as5600_reset_zero_calibration(int motor_idx) {
     float raw = g_last_reading[motor_idx].valid
                     ? g_last_reading[motor_idx].raw_deg
                     : s_last_valid[motor_idx].raw_deg;
-    float ratio = g_gear_ratio[motor_idx] > 0.001f
-                      ? g_gear_ratio[motor_idx]
-                      : GEAR_RATIO_CYCLOIDAL;
+    float ratio = g_gear_ratio[motor_idx] > 0.001f ? g_gear_ratio[motor_idx]
+                                                   : GEAR_RATIO_CYCLOIDAL;
     g_zero_raw_deg[motor_idx] = raw;
     g_zero_offset_deg[motor_idx] = raw / ratio;
     s_accum_turns[motor_idx] = 0;
@@ -600,9 +611,11 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
       sda = g_encoder_buses[motor_idx].sda_io;
       scl = g_encoder_buses[motor_idx].scl_io;
     } else {
-      // Rechazo de glitch transitorio I2C (tolera micro-incomunicaciones de hasta 0.20s = 10 ciclos @ 50Hz)
+      // Rechazo de glitch transitorio I2C (tolera micro-incomunicaciones de
+      // hasta 0.20s = 10 ciclos @ 50Hz)
       s_consecutive_errs[motor_idx]++;
-      if (s_consecutive_errs[motor_idx] <= 10 && s_last_valid[motor_idx].valid) {
+      if (s_consecutive_errs[motor_idx] <= 10 &&
+          s_last_valid[motor_idx].valid) {
         *out = s_last_valid[motor_idx];
         return ESP_OK;
       }
@@ -641,13 +654,17 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
     s_prev_raw_deg[motor_idx] = out->raw_deg;
     s_first_read[motor_idx] = false;
 
-    // Sincronización circular precisa +-180° motor respecto al cero calibrado en NVS:
+    // Sincronización circular precisa +-180° motor respecto al cero calibrado
+    // en NVS:
     float motor_diff = out->raw_deg - g_zero_raw_deg[motor_idx];
-    while (motor_diff > 180.0f) motor_diff -= 360.0f;
-    while (motor_diff < -180.0f) motor_diff += 360.0f;
+    while (motor_diff > 180.0f)
+      motor_diff -= 360.0f;
+    while (motor_diff < -180.0f)
+      motor_diff += 360.0f;
 
     float raw_diff = out->raw_deg - g_zero_raw_deg[motor_idx];
-    s_accum_turns[motor_idx] = (int32_t)roundf((motor_diff - raw_diff) / 360.0f);
+    s_accum_turns[motor_idx] =
+        (int32_t)roundf((motor_diff - raw_diff) / 360.0f);
   } else {
     float diff = out->raw_deg - s_prev_raw_deg[motor_idx];
     if (diff > 180.0f) {
@@ -671,14 +688,14 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
       uncalibrated_joint_deg - g_zero_offset_deg[motor_idx];
 
   // Filtro Digital IIR / EMA Pasa-Bajas adaptativo:
-  // Para M3 (Codo con holgura o brazo flojo): Alpha = 0.20 para suprimir micro-vibraciones mecánicas
-  // Para M1 y M2: Alpha = 0.60
+  // Para M3 (Codo con holgura o brazo flojo): Alpha = 0.20 para suprimir
+  // micro-vibraciones mecánicas Para M1 y M2: Alpha = 0.60
   float alpha = (motor_idx == 2) ? 0.20f : 0.60f;
   if (s_first_read[motor_idx] || s_filtered_deg[motor_idx] == 0.0f) {
     s_filtered_deg[motor_idx] = instant_calibrated;
   } else {
-    s_filtered_deg[motor_idx] =
-        (alpha * instant_calibrated) + ((1.0f - alpha) * s_filtered_deg[motor_idx]);
+    s_filtered_deg[motor_idx] = (alpha * instant_calibrated) +
+                                ((1.0f - alpha) * s_filtered_deg[motor_idx]);
   }
   out->calibrated_deg = s_filtered_deg[motor_idx];
   out->joint_angle_deg = out->calibrated_deg; // Ángulo continuo con signo real
@@ -702,7 +719,8 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
 }
 
 // ==============================================================================
-// 6. INICIALIZACIÓN DRIVERS TB6600 (LAZO ABIERTO GPTIMER 40 kHz + SWITCHES HOME)
+// 6. INICIALIZACIÓN DRIVERS TB6600 (LAZO ABIERTO GPTIMER 40 kHz + SWITCHES
+// HOME)
 // ==============================================================================
 static esp_err_t steppers_hardware_init(void) {
   uint64_t pin_mask = (1ULL << M1_PIN_DIR) | (1ULL << M1_PIN_ENA) |
@@ -725,7 +743,8 @@ static esp_err_t steppers_hardware_init(void) {
   gpio_set_level(M2_PIN_PUL, 0);
   gpio_set_level(M3_PIN_PUL, 0);
   gpio_set_level(M1_PIN_DIR, 0);
-  gpio_set_level(M1_PIN_ENA, 0); // 0 = ENA activo cátodo común (Energizado con torque firme al arranque)
+  gpio_set_level(M1_PIN_ENA, 0); // 0 = ENA activo cátodo común (Energizado con
+                                 // torque firme al arranque)
   gpio_set_level(M2_PIN_DIR, 0);
   gpio_set_level(M2_PIN_ENA, 0);
   gpio_set_level(M3_PIN_DIR, 0);
@@ -736,8 +755,10 @@ static esp_err_t steppers_hardware_init(void) {
     g_ol_axis[i].run_dir = 0;
   }
 
-  // Configurar 3 Switches de Límite para Homing (Pull-Up interno, activo en BAJO)
-  uint64_t sw_mask = (1ULL << SW_HOME_M1_IO) | (1ULL << SW_HOME_M2_IO) | (1ULL << SW_HOME_M3_IO);
+  // Configurar 3 Switches de Límite para Homing (Pull-Up interno, activo en
+  // BAJO)
+  uint64_t sw_mask = (1ULL << SW_HOME_M1_IO) | (1ULL << SW_HOME_M2_IO) |
+                     (1ULL << SW_HOME_M3_IO);
   gpio_config_t sw_conf = {
       .pin_bit_mask = sw_mask,
       .mode = GPIO_MODE_INPUT,
@@ -749,7 +770,8 @@ static esp_err_t steppers_hardware_init(void) {
   if (err != ESP_OK)
     return err;
 
-  // GPTimer a 1 MHz con alarma cada 25 us (40 kHz) -> generador de pulsos STEP en lazo abierto
+  // GPTimer a 1 MHz con alarma cada 25 us (40 kHz) -> generador de pulsos STEP
+  // en lazo abierto
   gptimer_config_t tcfg = {
       .clk_src = GPTIMER_CLK_SRC_DEFAULT,
       .direction = GPTIMER_COUNT_UP,
@@ -805,7 +827,8 @@ static void nvs_load_settings(void) {
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &handle);
   if (err == ESP_OK) {
     for (int m = 0; m < NUM_MOTORS; m++) {
-      float ratio = g_gear_ratio[m] > 0.001f ? g_gear_ratio[m] : GEAR_RATIO_CYCLOIDAL;
+      float ratio =
+          g_gear_ratio[m] > 0.001f ? g_gear_ratio[m] : GEAR_RATIO_CYCLOIDAL;
       char key[20];
       snprintf(key, sizeof(key), "zero_raw_%d", m + 1);
       int32_t raw_millideg = 0;
@@ -826,7 +849,9 @@ static void nvs_load_settings(void) {
           }
         }
       }
-      ESP_LOGI(TAG, "Motor %d Offset de Cero recuperado: Raw=%.2f deg | Reductor=%.2f deg",
+      ESP_LOGI(TAG,
+               "Motor %d Offset de Cero recuperado: Raw=%.2f deg | "
+               "Reductor=%.2f deg",
                m + 1, g_zero_raw_deg[m], g_zero_offset_deg[m]);
 
       // Cargar Límites de Seguridad de NVS si existen
@@ -842,14 +867,20 @@ static void nvs_load_settings(void) {
       }
       // Sanitización de límites amplios (360° M1, 180° M2/M3)
       if (m == 0) {
-        if (g_limit_min_deg[0] < -180.0f) g_limit_min_deg[0] = -180.0f;
-        if (g_limit_max_deg[0] > 180.0f)  g_limit_max_deg[0] = 180.0f;
+        if (g_limit_min_deg[0] < -180.0f)
+          g_limit_min_deg[0] = -180.0f;
+        if (g_limit_max_deg[0] > 180.0f)
+          g_limit_max_deg[0] = 180.0f;
       } else if (m == 1) {
-        if (g_limit_min_deg[1] < -90.0f) g_limit_min_deg[1] = -90.0f;
-        if (g_limit_max_deg[1] > 90.0f)  g_limit_max_deg[1] = 90.0f;
+        if (g_limit_min_deg[1] < -90.0f)
+          g_limit_min_deg[1] = -90.0f;
+        if (g_limit_max_deg[1] > 90.0f)
+          g_limit_max_deg[1] = 90.0f;
       } else if (m == 2) {
-        if (g_limit_min_deg[2] < -90.0f) g_limit_min_deg[2] = -90.0f;
-        if (g_limit_max_deg[2] > 90.0f)  g_limit_max_deg[2] = 90.0f;
+        if (g_limit_min_deg[2] < -90.0f)
+          g_limit_min_deg[2] = -90.0f;
+        if (g_limit_max_deg[2] > 90.0f)
+          g_limit_max_deg[2] = 90.0f;
       }
       ESP_LOGI(TAG, "Motor %d Límites de Seguridad NVS: [%.1f, %.1f] deg",
                m + 1, g_limit_min_deg[m], g_limit_max_deg[m]);
@@ -896,7 +927,8 @@ static void nvs_save_limits(int motor_idx, float min_deg, float max_deg) {
 static void nvs_save_zero_offset(int motor_idx, float raw_deg) {
   if (motor_idx < 0 || motor_idx >= NUM_MOTORS)
     return;
-  float ratio = g_gear_ratio[motor_idx] > 0.001f ? g_gear_ratio[motor_idx] : GEAR_RATIO_CYCLOIDAL;
+  float ratio = g_gear_ratio[motor_idx] > 0.001f ? g_gear_ratio[motor_idx]
+                                                 : GEAR_RATIO_CYCLOIDAL;
   g_zero_raw_deg[motor_idx] = raw_deg;
   g_zero_offset_deg[motor_idx] = raw_deg / ratio;
 
@@ -918,8 +950,10 @@ static void nvs_save_zero_offset(int motor_idx, float raw_deg) {
 
     nvs_commit(handle);
     nvs_close(handle);
-    ESP_LOGI(TAG, "Motor %d nuevo Offset guardado en NVS: Raw=%.2f deg (Joint=%.2f deg)",
-             motor_idx + 1, raw_deg, g_zero_offset_deg[motor_idx]);
+    ESP_LOGI(
+        TAG,
+        "Motor %d nuevo Offset guardado en NVS: Raw=%.2f deg (Joint=%.2f deg)",
+        motor_idx + 1, raw_deg, g_zero_offset_deg[motor_idx]);
   }
 }
 
@@ -928,7 +962,8 @@ static void nvs_save_all_zero_offsets(const float raw_angles[NUM_MOTORS]) {
   esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &handle);
   if (err == ESP_OK) {
     for (int m = 0; m < NUM_MOTORS; m++) {
-      float ratio = g_gear_ratio[m] > 0.001f ? g_gear_ratio[m] : GEAR_RATIO_CYCLOIDAL;
+      float ratio =
+          g_gear_ratio[m] > 0.001f ? g_gear_ratio[m] : GEAR_RATIO_CYCLOIDAL;
       g_zero_raw_deg[m] = raw_angles[m];
       g_zero_offset_deg[m] = raw_angles[m] / ratio;
 
@@ -946,11 +981,11 @@ static void nvs_save_all_zero_offsets(const float raw_angles[NUM_MOTORS]) {
     }
     nvs_commit(handle);
     nvs_close(handle);
-    ESP_LOGI(
-        TAG,
-        "Offsets de Cero NVS guardados para los 3 motores: Raw=[%.2f, %.2f, %.2f] deg | Joint=[%.2f, %.2f, %.2f] deg",
-        raw_angles[0], raw_angles[1], raw_angles[2],
-        g_zero_offset_deg[0], g_zero_offset_deg[1], g_zero_offset_deg[2]);
+    ESP_LOGI(TAG,
+             "Offsets de Cero NVS guardados para los 3 motores: Raw=[%.2f, "
+             "%.2f, %.2f] deg | Joint=[%.2f, %.2f, %.2f] deg",
+             raw_angles[0], raw_angles[1], raw_angles[2], g_zero_offset_deg[0],
+             g_zero_offset_deg[1], g_zero_offset_deg[2]);
   }
 }
 
@@ -979,7 +1014,8 @@ static void nvs_save_slot_position(int motor_idx, int slot, float angle_deg) {
 // 8. TAREA DE CONTROL EN LAZO CERRADO SUAVE A 50 HZ (3 MOTORES INDEPENDIENTES)
 // ==============================================================================
 // ==============================================================================
-// 8. TAREA DE CONTROL EN LAZO ABIERTO POR MICROPASOS (100 HZ) + LECTURA AS5600 SOLO INFO
+// 8. TAREA DE CONTROL EN LAZO ABIERTO POR MICROPASOS (100 HZ) + LECTURA AS5600
+// SOLO INFO
 // ==============================================================================
 static void steppers_control_task(void *pvParameters) {
   const float dt = (float)OL_CTRL_PERIOD_MS / 1000.0f;
@@ -990,14 +1026,16 @@ static void steppers_control_task(void *pvParameters) {
   while (1) {
     for (int i = 0; i < NUM_MOTORS; i++) {
       ol_axis_t *a = &g_ol_axis[i];
-      // Leer encoder AS5600 únicamente para telemetría / información (NO para PID)
+      // Leer encoder AS5600 únicamente para telemetría / información (NO para
+      // PID)
       as5600_reading_t r;
       as5600_read_motor(i, &r);
 
       float target = 0.0f;
       bool enabled = false;
       float lim_min = -180.0f, lim_max = 180.0f;
-      float vmax = g_max_speed_hz, vmin = g_min_speed_hz, accel = g_accel_hz_per_sec;
+      float vmax = g_max_speed_hz, vmin = g_min_speed_hz,
+            accel = g_accel_hz_per_sec;
 
       if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
         g_last_reading[i] = r;
@@ -1013,20 +1051,27 @@ static void steppers_control_task(void *pvParameters) {
         continue;
       }
 
-      // Si el Homing con switches está activo, ceder el control de pulsos a homing_sequence_task
+      // Si el Homing con switches está activo, ceder el control de pulsos a
+      // homing_sequence_task
       if (g_homing_active) {
         cur_speed[i] = 0.0f;
         continue;
       }
 
-      if (vmax > OL_MAX_STEP_HZ) vmax = OL_MAX_STEP_HZ;
-      if (vmin < 20.0f) vmin = 20.0f;
-      if (vmin > vmax) vmin = vmax;
-      if (accel < 100.0f) accel = 100.0f;
+      if (vmax > OL_MAX_STEP_HZ)
+        vmax = OL_MAX_STEP_HZ;
+      if (vmin < 20.0f)
+        vmin = 20.0f;
+      if (vmin > vmax)
+        vmin = vmax;
+      if (accel < 100.0f)
+        accel = 100.0f;
 
       // Acotamiento por límites de seguridad mecánica configurables
-      if (target < lim_min) target = lim_min;
-      if (target > lim_max) target = lim_max;
+      if (target < lim_min)
+        target = lim_min;
+      if (target > lim_max)
+        target = lim_max;
 
       int32_t pos = a->pos;
 
@@ -1069,23 +1114,27 @@ static void steppers_control_task(void *pvParameters) {
             cur_speed[i] = 0.0f;
             a->speed_hz = 0;
           } else {
-            int32_t coast = (int32_t)((cur_speed[i] * cur_speed[i]) / (2.0f * accel)) + 1;
+            int32_t coast =
+                (int32_t)((cur_speed[i] * cur_speed[i]) / (2.0f * accel)) + 1;
             a->target = a->run_dir ? (pos + coast) : (pos - coast);
             a->speed_hz = (uint32_t)cur_speed[i];
           }
           st = MOTOR_STATE_BRAKING;
         } else {
-          // Perfil trapezoidal: acelera, crucero y frena justo al llegar al objetivo
+          // Perfil trapezoidal: acelera, crucero y frena justo al llegar al
+          // objetivo
           float dist = fabsf((float)err);
           float v_brake = sqrtf(2.0f * accel * dist);
           float v_goal = (v_brake < vmax) ? v_brake : vmax;
           if (cur_speed[i] < v_goal) {
             cur_speed[i] += accel * dt;
-            if (cur_speed[i] > v_goal) cur_speed[i] = v_goal;
+            if (cur_speed[i] > v_goal)
+              cur_speed[i] = v_goal;
           } else {
             cur_speed[i] = v_goal;
           }
-          if (cur_speed[i] < vmin) cur_speed[i] = vmin;
+          if (cur_speed[i] < vmin)
+            cur_speed[i] = vmin;
           a->target = tgt_steps;
           a->run_dir = dir;
           a->speed_hz = (uint32_t)cur_speed[i];
@@ -1095,13 +1144,17 @@ static void steppers_control_task(void *pvParameters) {
 
       if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
         g_current_error[i] = (float)err / ol_steps_per_deg(i);
-        g_current_speed_hz[i] = (st == MOTOR_STATE_IN_POSITION) ? 0
-                                : (int32_t)(a->run_dir ? cur_speed[i] : -cur_speed[i]);
+        g_current_speed_hz[i] =
+            (st == MOTOR_STATE_IN_POSITION)
+                ? 0
+                : (int32_t)(a->run_dir ? cur_speed[i] : -cur_speed[i]);
         g_motor_state[i] = st;
         xSemaphoreGive(g_data_mutex);
       }
     }
-    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(OL_CTRL_PERIOD_MS) > 0 ? pdMS_TO_TICKS(OL_CTRL_PERIOD_MS) : 1);
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(OL_CTRL_PERIOD_MS) > 0
+                                    ? pdMS_TO_TICKS(OL_CTRL_PERIOD_MS)
+                                    : 1);
   }
 }
 
@@ -1136,19 +1189,22 @@ static void homing_sequence_task(void *pvParameters) {
     float spd_per_deg = ol_steps_per_deg(i);
 
     if (i == 0) {
-      // M1 (Base circular): barrido oscilatorio creciente Izq (-10°) / Der (+10°),
-      // sumando 10° en cada ciclo (±10°, ±20°, ±30°... hasta ±180°) hasta tocar el switch.
+      // M1 (Base circular): barrido oscilatorio creciente Izq (-10°) / Der
+      // (+10°), sumando 10° en cada ciclo (±10°, ±20°, ±30°... hasta ±180°)
+      // hasta tocar el switch.
       bool found = limit_switch_is_pressed(0);
       int hit_dir = 0;
       int32_t center_pos = a->pos;
 
-      for (float amp_deg = 10.0f; !found && amp_deg <= 180.0f; amp_deg += 10.0f) {
+      for (float amp_deg = 10.0f; !found && amp_deg <= 180.0f;
+           amp_deg += 10.0f) {
         const int dirs[2] = {0, 1}; // 0 = Izquierda (-), 1 = Derecha (+)
         for (int d_idx = 0; d_idx < 2 && !found; d_idx++) {
           int dir = dirs[d_idx];
           int32_t offset = (int32_t)lroundf(amp_deg * spd_per_deg);
           a->run_dir = dir;
-          a->target = (dir == 0) ? (center_pos - offset) : (center_pos + offset);
+          a->target =
+              (dir == 0) ? (center_pos - offset) : (center_pos + offset);
           a->speed_hz = 600;
 
           int debounce = 0;
@@ -1176,13 +1232,17 @@ static void homing_sequence_task(void *pvParameters) {
       }
 
       if (!found) {
-        ESP_LOGE(TAG, "Timeout en Homing oscilatorio de M1: switch GPIO %d no detectado.", g_home_sw_pins[0]);
+        ESP_LOGE(
+            TAG,
+            "Timeout en Homing oscilatorio de M1: switch GPIO %d no detectado.",
+            g_home_sw_pins[0]);
         printf("$ALARM,HOMING_TIMEOUT,M1*00\r\n");
         all_ok = false;
         break;
       }
 
-      // Retroceder ligeramente en sentido contrario al que tocó el switch hasta liberar + 1.5°
+      // Retroceder ligeramente en sentido contrario al que tocó el switch hasta
+      // liberar + 1.5°
       int back_dir = (hit_dir == 0) ? 1 : 0;
       a->run_dir = back_dir;
       int32_t back_5 = (int32_t)lroundf(5.0f * spd_per_deg);
@@ -1196,14 +1256,16 @@ static void homing_sequence_task(void *pvParameters) {
       int32_t extra_1_5 = (int32_t)lroundf(1.5f * spd_per_deg);
       a->target = back_dir ? (a->pos + extra_1_5) : (a->pos - extra_1_5);
       int extra_ms = 600;
-      while (extra_ms > 0 && (back_dir ? (a->pos < a->target) : (a->pos > a->target))) {
+      while (extra_ms > 0 &&
+             (back_dir ? (a->pos < a->target) : (a->pos > a->target))) {
         vTaskDelay(pdMS_TO_TICKS(5));
         extra_ms -= 5;
       }
       a->speed_hz = 0;
       vTaskDelay(pdMS_TO_TICKS(60));
     } else {
-      // M3 (Codo) y M2 (Hombro): mover hacia atrás (CCW, run_dir = 0) hasta presionar el switch
+      // M3 (Codo) y M2 (Hombro): mover hacia atrás (CCW, run_dir = 0) hasta
+      // presionar el switch
       if (!limit_switch_is_pressed(i)) {
         a->run_dir = 0;
         a->target = a->pos - (int32_t)(360.0f * spd_per_deg);
@@ -1214,7 +1276,8 @@ static void homing_sequence_task(void *pvParameters) {
         while (timeout_ms > 0) {
           if (limit_switch_is_pressed(i)) {
             debounce++;
-            if (debounce >= 3) break;
+            if (debounce >= 3)
+              break;
           } else {
             debounce = 0;
           }
@@ -1225,14 +1288,17 @@ static void homing_sequence_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(60));
 
         if (timeout_ms <= 0) {
-          ESP_LOGE(TAG, "Timeout en Homing de M%d: switch GPIO %d no detectado.", i + 1, g_home_sw_pins[i]);
+          ESP_LOGE(TAG,
+                   "Timeout en Homing de M%d: switch GPIO %d no detectado.",
+                   i + 1, g_home_sw_pins[i]);
           printf("$ALARM,HOMING_TIMEOUT,M%d*00\r\n", i + 1);
           all_ok = false;
           break;
         }
       }
 
-      // Retroceder ligeramente en sentido positivo (CW, run_dir = 1) hasta liberar + 1.5°
+      // Retroceder ligeramente en sentido positivo (CW, run_dir = 1) hasta
+      // liberar + 1.5°
       a->run_dir = 1;
       a->target = a->pos + (int32_t)(5.0f * spd_per_deg);
       a->speed_hz = 250;
@@ -1368,8 +1434,9 @@ static void play_cell_sequence_task(void *pvParameters) {
 // 10. APP_MAIN (INICIALIZACIÓN, PARSER DE COMANDOS Y TELEMETRÍA)
 // ==============================================================================
 void app_main(void) {
-  // Deshabilitar detector de brownout por hardware para evitar bucle de reinicios continuos
-  // por caídas de tensión en cables USB largos o protoboards
+  // Deshabilitar detector de brownout por hardware para evitar bucle de
+  // reinicios continuos por caídas de tensión en cables USB largos o
+  // protoboards
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
 
   ESP_LOGI(TAG, "==========================================================");
@@ -1380,9 +1447,14 @@ void app_main(void) {
   ESP_LOGI(TAG, "     * M2: SDA=GPIO 8, SCL=GPIO 9  (Hombro)");
   ESP_LOGI(TAG, "     * M3: SDA=GPIO 10, SCL=GPIO 11 (Codo)");
   ESP_LOGI(TAG, "   - Drivers TB6600 (Lazo Abierto GPTimer 40 kHz):");
-  ESP_LOGI(TAG, "     * M1: PUL=GPIO 4, DIR=GPIO 5, ENA=GPIO 6   | SW_HOME=GPIO 18");
-  ESP_LOGI(TAG, "     * M2: PUL=GPIO 15, DIR=GPIO 16, ENA=GPIO 17 | SW_HOME=GPIO 21");
-  ESP_LOGI(TAG, "     * M3: PUL=GPIO 12, DIR=GPIO 13, ENA=GPIO 14 | SW_HOME=GPIO 38");
+  ESP_LOGI(TAG,
+           "     * M1: PUL=GPIO 4, DIR=GPIO 5, ENA=GPIO 6   | SW_HOME=GPIO 18");
+  ESP_LOGI(
+      TAG,
+      "     * M2: PUL=GPIO 15, DIR=GPIO 16, ENA=GPIO 17 | SW_HOME=GPIO 21");
+  ESP_LOGI(
+      TAG,
+      "     * M3: PUL=GPIO 12, DIR=GPIO 13, ENA=GPIO 14 | SW_HOME=GPIO 38");
   ESP_LOGI(TAG, "   - Herramienta Gripper: GPIO 7");
   ESP_LOGI(TAG, "==========================================================");
 
@@ -1475,16 +1547,20 @@ void app_main(void) {
     stepper_set_hw_speed(i, 0, 0);
     stepper_set_enable(i, true);
   }
-  ESP_LOGI(TAG, "Drivers Steppers TB6600 inicializados con torque de retención firme.");
+  ESP_LOGI(
+      TAG,
+      "Drivers Steppers TB6600 inicializados con torque de retención firme.");
 
-  // Pre-leer encoders para información inicial; la posición de control arranca en 0.0° (micropasos)
+  // Pre-leer encoders para información inicial; la posición de control arranca
+  // en 0.0° (micropasos)
   for (int m = 0; m < NUM_MOTORS; m++) {
     as5600_reading_t r = {0};
     as5600_read_motor(m, &r);
     g_last_reading[m] = r;
     g_target_deg[m] = 0.0f;
     ol_set_zero(m);
-    g_motor_enabled[m] = true; // Motores energizados y firmes en su postura actual
+    g_motor_enabled[m] =
+        true; // Motores energizados y firmes en su postura actual
   }
 
   // 4. Periférico UART (115200 Baudios, 8N1, Buffer Circular 1024 Bytes)
@@ -1503,10 +1579,9 @@ void app_main(void) {
   xTaskCreatePinnedToCore(steppers_control_task, "steppers_ctrl", 4096, NULL, 5,
                           NULL, 1);
 
-  // 6. Auto-Homing al conectar/encender el ESP32:
-  //    M3 y M2 retroceden hacia atrás hasta su switch; M1 oscila ±10°, ±20°, ±30°... hasta su switch.
+  // 6. Auto-Homing al conectar/energizar la ESP32-S3 (M3/M2 hacia atrás + M1 barrido ±10°..±180°)
   vTaskDelay(pdMS_TO_TICKS(300));
-  xTaskCreatePinnedToCore(homing_sequence_task, "homing_boot", 4096, NULL, 6,
+  xTaskCreatePinnedToCore(homing_sequence_task, "homing_sw", 4096, NULL, 6,
                           NULL, 1);
 
   char rx_buf[128];
@@ -1696,8 +1771,8 @@ void app_main(void) {
                       if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(100)) ==
                           pdTRUE) {
                         raw = g_last_reading[ax].valid
-                                        ? g_last_reading[ax].raw_deg
-                                        : s_last_valid[ax].raw_deg;
+                                  ? g_last_reading[ax].raw_deg
+                                  : s_last_valid[ax].raw_deg;
                         as5600_reset_zero_calibration(ax);
                         ol_set_zero(ax);
                         g_last_reading[ax].calibrated_deg = 0.0f;
@@ -1742,7 +1817,8 @@ void app_main(void) {
                       nvs_load_settings();
                       for (int ax = 0; ax < NUM_MOTORS; ax++) {
                         s_first_read[ax] = true;
-                        g_target_deg[ax] = 0.0f; // Regresa a la postura cero calibrada (0.0°)
+                        g_target_deg[ax] =
+                            0.0f; // Regresa a la postura cero calibrada (0.0°)
                         g_motor_enabled[ax] = true;
                       }
                       xSemaphoreGive(g_data_mutex);
@@ -2121,7 +2197,8 @@ void app_main(void) {
                 nvs_load_settings();
                 for (int ax = 0; ax < NUM_MOTORS; ax++) {
                   s_first_read[ax] = true;
-                  g_target_deg[ax] = 0.0f; // Regresa a la postura cero calibrada (0.0°)
+                  g_target_deg[ax] =
+                      0.0f; // Regresa a la postura cero calibrada (0.0°)
                   g_motor_enabled[ax] = true;
                 }
                 xSemaphoreGive(g_data_mutex);
@@ -2153,8 +2230,8 @@ void app_main(void) {
             } else if (strcmp(rx_buf, "HOMING") == 0 ||
                        strcmp(rx_buf, "HOME_SW") == 0) {
               if (!g_homing_active) {
-                xTaskCreatePinnedToCore(homing_sequence_task, "homing_sw",
-                                        4096, NULL, 6, NULL, 1);
+                xTaskCreatePinnedToCore(homing_sequence_task, "homing_sw", 4096,
+                                        NULL, 6, NULL, 1);
               }
               printf("ACK:HOMING_STARTED\n");
             } else if (strcmp(rx_buf, "HOME") == 0) {
@@ -2219,16 +2296,15 @@ void app_main(void) {
     if (telemetry_timer >= 20) {
       telemetry_timer = 0;
 
-      // 1. Trama Enmarcada $TEL3 para GUI (posición controlada por micropasos en lazo abierto)
-      // Formato:
+      // 1. Trama Enmarcada $TEL3 para GUI (posición controlada por micropasos
+      // en lazo abierto) Formato:
       // $TEL3,1,<ANG1>,<SPD1>,2,<ANG2>,<SPD2>,3,<ANG3>,<SPD3>,<GRIPPER>*<CS>\r\n
       char tel_payload[96];
       snprintf(tel_payload, sizeof(tel_payload),
-               "TEL3,1,%.2f,%ld,2,%.2f,%ld,3,%.2f,%ld,%d",
-               ol_pos_deg(0), (long)g_current_speed_hz[0],
-               ol_pos_deg(1), (long)g_current_speed_hz[1],
-               ol_pos_deg(2), (long)g_current_speed_hz[2],
-               g_gripper_active ? 1 : 0);
+               "TEL3,1,%.2f,%ld,2,%.2f,%ld,3,%.2f,%ld,%d", ol_pos_deg(0),
+               (long)g_current_speed_hz[0], ol_pos_deg(1),
+               (long)g_current_speed_hz[1], ol_pos_deg(2),
+               (long)g_current_speed_hz[2], g_gripper_active ? 1 : 0);
 
       uint8_t tel_cs = 0;
       for (size_t k = 0; k < strlen(tel_payload); k++) {
@@ -2236,7 +2312,8 @@ void app_main(void) {
       }
       printf("$%s*%02X\r\n", tel_payload, tel_cs);
 
-      // 2. Trama Enmarcada $ENC con Estado de Conexión de los 3 Encoders AS5600 (Solo Información)
+      // 2. Trama Enmarcada $ENC con Estado de Conexión de los 3 Encoders AS5600
+      // (Solo Información)
       char enc_payload[96];
       snprintf(enc_payload, sizeof(enc_payload),
                "ENC,1,%d,%d,%d,2,%d,%d,%d,3,%d,%d,%d",
@@ -2252,8 +2329,9 @@ void app_main(void) {
         enc_cs ^= (uint8_t)enc_payload[k];
       printf("$%s*%02X\r\n", enc_payload, enc_cs);
 
-      // 2b. Trama $ENC_INFO con ángulos calibrados de los AS5600 (Solo Información)
-      // y $SW con estado de los 3 switches de Home (1 = presionado, 0 = libre)
+      // 2b. Trama $ENC_INFO con ángulos calibrados de los AS5600 (Solo
+      // Información) y $SW con estado de los 3 switches de Home (1 =
+      // presionado, 0 = libre)
       char einfo_payload[64];
       snprintf(einfo_payload, sizeof(einfo_payload), "ENC_INFO,%.2f,%.2f,%.2f",
                g_last_reading[0].calibrated_deg,
@@ -2278,10 +2356,9 @@ void app_main(void) {
       for (int m = 0; m < NUM_MOTORS; m++) {
         char tel_ind[96];
         snprintf(tel_ind, sizeof(tel_ind), "TEL,%d,%.2f,%u,%ld,%.2f,%d,%u,%d",
-                 m + 1, ol_pos_deg(m),
-                 g_last_reading[m].raw_angle, (long)g_current_speed_hz[m],
-                 g_current_error[m], (int)g_motor_state[m],
-                 g_last_reading[m].agc,
+                 m + 1, ol_pos_deg(m), g_last_reading[m].raw_angle,
+                 (long)g_current_speed_hz[m], g_current_error[m],
+                 (int)g_motor_state[m], g_last_reading[m].agc,
                  g_last_reading[m].magnet_detected ? 1 : 0);
         uint8_t ind_cs = 0;
         for (size_t k = 0; k < strlen(tel_ind); k++)

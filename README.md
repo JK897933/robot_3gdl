@@ -34,11 +34,16 @@ Desarrollado para la **Universidad Politécnica de Aguascalientes (UPA)**.
 | **Gripper / Imán 12V** | **GPIO 7** | — | — | — | Salida Digital ON/OFF | GND Común ESP32 |
 
 ### 2. Switches de Límite para Homing Automático (`SW_HOME`):
-| Switch / Articulación | Pin ESP32-S3 | Configuración Eléctrica | Secuencia y Lógica de Homing |
-|---|---|---|---|
-| **SW_HOME_M3 (Codo)** | **GPIO 38** | Entrada con Pull-Up interno (cierre a GND) | **1° en secuencia** \| Activo en BAJO (`0V`) → retrocede +1.5° y fija `0.0°` |
-| **SW_HOME_M2 (Hombro)** | **GPIO 21** | Entrada con Pull-Up interno (cierre a GND) | **2° en secuencia** \| Activo en BAJO (`0V`) → retrocede +1.5° y fija `0.0°` |
-| **SW_HOME_M1 (Base)** | **GPIO 18** | Entrada con Pull-Up interno (cierre a GND) | **3° en secuencia** \| Activo en BAJO (`0V`) → retrocede +1.5° y fija `0.0°` |
+Los microswitches mecánicos de **3 pines** (`COM`, `NO`, `NC`) se conectan usando únicamente **2 pines** (el pin **`NC` queda libre / sin conectar**):
+* **`COM` (Común)** → **`GND`** de la ESP32-S3
+* **`NO` (Normalmente Abierto)** → **`GPIO`** correspondiente (`Pull-Up` interno, activo en BAJO `0V` al presionar)
+* **`NC` (Normalmente Cerrado)** → **Sin conectar**
+
+| Switch / Articulación | Pin `NO` (ESP32-S3) | Pin `COM` | Pin `NC` | Secuencia y Lógica de Auto-Homing al Encender |
+|---|---|---|---|---|
+| **SW_HOME_M3 (Codo)** | **GPIO 38** | **GND** | Libre | **1° en secuencia** \| Retrocede hacia atrás (`CCW`) hasta presionar (`0V`), libera `+1.5°` y fija `0.0°` |
+| **SW_HOME_M2 (Hombro)** | **GPIO 21** | **GND** | Libre | **2° en secuencia** \| Retrocede hacia atrás (`CCW`) hasta presionar (`0V`), libera `+1.5°` y fija `0.0°` |
+| **SW_HOME_M1 (Base)** | **GPIO 18** | **GND** | Libre | **3° en secuencia** \| Barrido oscilatorio creciente (`±10°, ±20°, ±30°...`) hasta tocar switch frontal, libera `1.5°` y fija `0.0°` |
 
 > **Nota de Control Motriz:** Cada motor NEMA 17 opera a **4 micropasos (800 pulsos/rev)** con reductor cicloidal **31:1**, equivalente a **24,800 micropasos/rev** en la articulación (**68.89 pasos/°**). Las rampas trapezoidales se actualizan a **100 Hz** (límite de frecuencia en firmware: `3000 Hz`).
 
