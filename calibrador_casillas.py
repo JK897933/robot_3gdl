@@ -338,7 +338,7 @@ class CalibradorCasillasApp(tk.Tk):
         st = 1.0 if self.gripper_state else 0.0
         self.send_cmd("GRIPPER", st)
         self.btn_gripper.config(
-            text="Electroimán: ACTIVADO (12V)" if self.gripper_state else "Electroimán: APAGADO",
+            text="Pinza SG90: CERRADA" if self.gripper_state else "Pinza SG90: ABIERTA",
             bg=COLOR_GREEN if self.gripper_state else "#475569"
         )
 
@@ -392,6 +392,74 @@ class CalibradorCasillasApp(tk.Tk):
             f"  • M2 (Hombro): {q2:+06.2f}°\n"
             f"  • M3 (Codo):   {q3:+06.2f}°\n\n"
             f"Coordenadas en mesa: X={x:.2f}cm, Y={y:.2f}cm, Z={z:.2f}cm"
+        )
+
+    def _parse_xyz(self):
+        try:
+            x = float(self.var_x.get())
+            y = float(self.var_y.get())
+            z = float(self.var_z.get())
+            return x, y, z
+        except ValueError:
+            messagebox.showerror("Valores inválidos", "Ingresa números válidos en X, Y y Z (en cm).")
+            return None
+
+    def move_to_xyz(self):
+        coords = self._parse_xyz()
+        if coords is None:
+            return
+        x, y, z = coords
+        angles, ok, msg = self.kin.inverse_kinematics(x, y, z)
+        if not ok:
+            messagebox.showwarning("Fuera de alcance", f"No se puede alcanzar ({x:.2f}, {y:.2f}, {z:.2f}):\n{msg}")
+            return
+        q1, q2, q3 = angles
+        self.motors_free_state = False
+        self.current_angles = [q1, q2, q3]
+        self.send_cmd("ANGLES", q1, q2, q3)
+        self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
+        if hasattr(self, "lbl_xyz_ik_info"):
+            self.lbl_xyz_ik_info.config(text=f"IK: q1={q1:+.2f}°, q2={q2:+.2f}°, q3={q3:+.2f}°", fg=COLOR_GREEN)
+
+    def jog_xyz(self, axis_idx, delta_cm):
+        coords = self._parse_xyz()
+        if coords is None:
+            return
+        vals = list(coords)
+        vals[axis_idx] = round(vals[axis_idx] + delta_cm, 2)
+        self.var_x.set(f"{vals[0]:.2f}")
+        self.var_y.set(f"{vals[1]:.2f}")
+        self.var_z.set(f"{vals[2]:.2f}")
+        self.move_to_xyz()
+
+    def save_xyz_to_target(self):
+        coords = self._parse_xyz()
+        if coords is None:
+            return
+        x, y, z = coords
+        angles, ok, msg = self.kin.inverse_kinematics(x, y, z)
+        if not ok:
+            messagebox.showwarning("Fuera de alcance", f"No se puede guardar ({x:.2f}, {y:.2f}, {z:.2f}):\n{msg}")
+            return
+        q1, q2, q3 = angles
+        sel = self.combo_xyz_target.get()
+        key = "pick" if "Dispensador" in sel else sel.split()[-1]
+
+        self.calibrated_cells[str(key)] = {
+            "angles": [round(q1, 2), round(q2, 2), round(q3, 2)],
+            "cartesian": [round(x, 2), round(y, 2), round(z, 2)],
+            "recorded_at": time.strftime("%H:%M:%S")
+        }
+        self.save_calibrated_cells()
+        self.update_cells_display()
+        self.current_angles = [q1, q2, q3]
+        if hasattr(self, "lbl_xyz_ik_info"):
+            self.lbl_xyz_ik_info.config(text=f"Guardado en {sel}: q=({q1:+.1f}°, {q2:+.1f}°, {q3:+.1f}°)", fg=COLOR_GREEN)
+        messagebox.showinfo(
+            "Posición Guardada por (X, Y, Z)",
+            f"¡{sel} guardada con éxito!\n\n"
+            f"  • Coordenadas: X={x:.2f} cm, Y={y:.2f} cm, Z={z:.2f} cm\n"
+            f"  • Ángulos IK:  M1={q1:+.2f}°, M2={q2:+.2f}°, M3={q3:+.2f}°"
         )
 
     def move_to_cell(self, key):
@@ -753,9 +821,71 @@ class CalibradorCasillasApp(tk.Tk):
             command=lambda: self.move_to_cell("pick")
         ).pack(side=tk.LEFT, padx=4)
 
-        # COLUMNA DERECHA: MOTOR DE CINEMÁTICA INVERSA Y REPORTE
+        # COLUMNA DERECHA: CONTROL CARTESIANO (X, Y, Z) + MOTOR DE CINEMÁTICA INVERSA
         right_col = tk.Frame(body, bg=COLOR_BG_PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground=COLOR_BORDER)
         right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4, 0))
+
+        # --- PANEL DE INDICACIONES EN X, Y, Z PARA MOVER Y GUARDAR ---
+        xyz_card = tk.Frame(right_col, bg=COLOR_BG_CARD, padx=10, pady=8, highlightthickness=1, highlightbackground=COLOR_BORDER)
+        xyz_card.pack(fill=tk.X, pady=(0, 8))
+
+        tk.Label(
+            xyz_card, text="INDICACIONES EN (X, Y, Z) — MOVER Y GUARDAR POSICIÓN",
+            bg=COLOR_BG_CARD, fg=COLOR_ACCENT, font=("Segoe UI", 9, "bold")
+        ).pack(anchor=tk.W)
+
+        row_in = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        row_in.pack(fill=tk.X, pady=(4, 2))
+
+        self.var_x = tk.StringVar(value="61.20")
+        self.var_y = tk.StringVar(value="0.00")
+        self.var_z = tk.StringVar(value="-29.10")
+
+        for lbl, var in [("X (cm):", self.var_x), ("Y (cm):", self.var_y), ("Z (cm):", self.var_z)]:
+            tk.Label(row_in, text=lbl, bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 2))
+            tk.Entry(row_in, textvariable=var, width=7, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 8))
+
+        tk.Button(
+            row_in, text="Mover a (X, Y, Z)", bg=COLOR_BLUE, fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=10, pady=3, cursor="hand2",
+            command=self.move_to_xyz
+        ).pack(side=tk.LEFT, padx=(2, 0))
+
+        # Botones Jog rápido en X, Y, Z
+        jog_xyz_frame = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        jog_xyz_frame.pack(fill=tk.X, pady=3)
+        for ax_idx, ax_name in [(0, "X"), (1, "Y"), (2, "Z")]:
+            tk.Label(jog_xyz_frame, text=f"{ax_name}:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 7, "bold")).pack(side=tk.LEFT, padx=(4 if ax_idx > 0 else 0, 2))
+            for d_cm in (-5.0, -1.0, +1.0, +5.0):
+                txt = f"{d_cm:+.0f}"
+                tk.Button(
+                    jog_xyz_frame, text=txt, font=("Segoe UI", 7), padx=3, pady=0, cursor="hand2",
+                    command=lambda i=ax_idx, d=d_cm: self.jog_xyz(i, d)
+                ).pack(side=tk.LEFT, padx=1)
+
+        # Guardar (X, Y, Z) directamente en una casilla o dispensador
+        save_row = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        save_row.pack(fill=tk.X, pady=(4, 2))
+        tk.Label(save_row, text="Destino:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
+        self.combo_xyz_target = ttk.Combobox(
+            save_row,
+            values=[f"Casilla {i}" for i in range(1, 10)] + ["Dispensador (pick)"],
+            state="readonly", width=18
+        )
+        self.combo_xyz_target.current(0)
+        self.combo_xyz_target.pack(side=tk.LEFT, padx=(0, 6))
+
+        tk.Button(
+            save_row, text="Guardar (X, Y, Z) en Destino", bg=COLOR_GREEN, fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=10, pady=3, cursor="hand2",
+            command=self.save_xyz_to_target
+        ).pack(side=tk.LEFT)
+
+        self.lbl_xyz_ik_info = tk.Label(
+            xyz_card, text="Ingresa X, Y, Z (cm) y pulsa 'Mover' o 'Guardar en Destino'.",
+            bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Consolas", 8)
+        )
+        self.lbl_xyz_ik_info.pack(anchor=tk.W, pady=(2, 0))
 
         tk.Label(
             right_col, text="MOTOR DE CINEMÁTICA INVERSA Y ANÁLISIS",
