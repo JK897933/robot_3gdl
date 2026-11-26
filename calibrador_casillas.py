@@ -321,6 +321,12 @@ class CalibradorCasillasApp(tk.Tk):
         self.send_cmd("HOME")
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
 
+    def cmd_homing_switches(self):
+        """Ejecuta en la ESP32 la rutina de Homing físico (M3/M2 atrás + M1 barrido ±10°..±180°)."""
+        self.motors_free_state = False
+        self.send_cmd("HOMING")
+        self.lbl_mode_pill.config(text="HOMING CON SWITCHES EN CURSO...", bg=COLOR_AMBER_BG, fg=COLOR_AMBER)
+
     def toggle_gripper(self):
         self.gripper_state = not self.gripper_state
         st = 1.0 if self.gripper_state else 0.0
@@ -675,8 +681,14 @@ class CalibradorCasillasApp(tk.Tk):
             command=self.cmd_home
         ).pack(side=tk.LEFT, padx=4)
 
+        tk.Button(
+            m_btn_row, text="HOME CON SWITCHES", bg="#c2410c", fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
+            command=self.cmd_homing_switches
+        ).pack(side=tk.LEFT, padx=4)
+
         self.btn_gripper = tk.Button(
-            m_btn_row, text="Electroimán: APAGADO", bg="#475569", fg="#ffffff",
+            m_btn_row, text="Pinza SG90: ABIERTA", bg="#475569", fg="#ffffff",
             font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
             command=self.toggle_gripper
         )
