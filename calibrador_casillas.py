@@ -63,7 +63,7 @@ class KinematicsEngine:
         self.a1 = float(a1)  # Offset horizontal hombro (cm)
         self.a2 = float(a2)  # Longitud brazo principal (cm)
         self.a3 = float(a3)  # Longitud antebrazo (cm)
-        self.limits = [(-180.0, 180.0), (-90.0, 95.0), (-60.0, 100.0)]
+        self.limits = [(-360.0, 360.0), (-360.0, 360.0), (-360.0, 360.0)]
 
     def forward_kinematics(self, q1_deg, q2_deg, q3_deg):
         """Calcula (X, Y, Z) en cm dado (q1, q2, q3) en grados bajo cinemática de paralelogramo."""
@@ -113,21 +113,9 @@ class KinematicsEngine:
 
         beta = math.atan2(dz, dr)
 
-        # Codo arriba y codo abajo
+        # Codo arriba y codo abajo (sin límites por software: los switches físicos marcan el límite)
         sol_up = (q1_deg, math.degrees(beta + psi), math.degrees(-(beta + psi - dth)))
-        sol_down = (q1_deg, math.degrees(beta - psi), math.degrees(-(beta - psi + dth)))
-
-        def is_ok(s):
-            return (self.limits[0][0] - 0.1 <= s[0] <= self.limits[0][1] + 0.1 and
-                    self.limits[1][0] - 0.1 <= s[1] <= self.limits[1][1] + 0.1 and
-                    self.limits[2][0] - 0.1 <= s[2] <= self.limits[2][1] + 0.1)
-
-        if is_ok(sol_up):
-            return sol_up, True, "OK"
-        if is_ok(sol_down):
-            return sol_down, True, "OK"
-
-        return sol_down, False, "Límites articulares excedidos"
+        return sol_up, True, "OK"
 
 
 # ==============================================================================
@@ -346,10 +334,6 @@ class CalibradorCasillasApp(tk.Tk):
         self.motors_free_state = False
         new_ang = list(self.current_angles)
         new_ang[axis_idx] += delta_deg
-
-        # Validar límites
-        lim = self.kin.limits[axis_idx]
-        new_ang[axis_idx] = max(lim[0], min(lim[1], new_ang[axis_idx]))
 
         self.send_cmd("ANGLES", new_ang[0], new_ang[1], new_ang[2])
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)

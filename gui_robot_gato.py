@@ -183,25 +183,14 @@ class RobotMK2Kinematics:
         # M2 (Hombro): [-90.0°,  +95.0°]
         # M3 (Codo):   [  0.0°,  +85.0°] Protege contra choque de tuerca/varilla en los reductores
         self.limits = [
-            (-180.0, 180.0), # J1 (Base - Yaw): Giro completo 360° [-180°, +180°]
-            (-90.0, 95.0),   # J2 (Hombro - Pitch): [-90°, +95°]
-            (0.0, 85.0)      # J3 (Codo - Pitch): [0°, +85°] Protege contra choque de tuerca en reductores
+            (-360.0, 360.0),
+            (-360.0, 360.0),
+            (-360.0, 360.0)
         ]
         self.nut_collision_margin_deg = 2.0  # Margen de alerta temprana de colisión
 
     def check_m2_m3_collision(self, q2_deg, q3_deg):
-        """
-        Verificación de límites articulares.
-        Con rango completo [-90°, +90°] se permite total libertad de movimiento.
-        Retorna:
-          (colliding: bool, warning: bool, message: str)
-        """
-        lim_m2 = self.limits[1]
-        lim_m3 = self.limits[2]
-        if q3_deg < lim_m3[0] or q3_deg > lim_m3[1]:
-            return True, True, f"M3 fuera de rango [{lim_m3[0]:.0f}°, {lim_m3[1]:.0f}°]"
-        if q2_deg < lim_m2[0] or q2_deg > lim_m2[1]:
-            return True, True, f"M2 fuera de rango [{lim_m2[0]:.0f}°, {lim_m2[1]:.0f}°]"
+        """Sin límites por software: el límite físico lo dan los switches de M1, M2 y M3."""
         return False, False, "OK"
 
     # --------------------------------------------------------------------------
@@ -351,39 +340,8 @@ class RobotMK2Kinematics:
         t3_d = t2_d + dth
         sol_down = (q1_deg, math.degrees(t2_d), math.degrees(-t3_d))
 
-        # --- PASO 5: Filtrado de límites mecánicos exactos ---
-        # M1: [-60.0°, +60.0°]
-        # M2: [-60.0°, +60.0°]
-        # M3: [  0.0°, +45.0°]
-        lim_m1 = self.limits[0]
-        lim_m2 = self.limits[1]
-        lim_m3 = self.limits[2]
-
-        def check_lims(sol):
-            j1, j2, j3 = sol
-            return (lim_m1[0] - 0.1 <= j1 <= lim_m1[1] + 0.1 and
-                    lim_m2[0] - 0.1 <= j2 <= lim_m2[1] + 0.1 and
-                    lim_m3[0] - 0.1 <= j3 <= lim_m3[1] + 0.1)
-
-        v_up = check_lims(sol_up)
-        v_down = check_lims(sol_down)
-
-        if elbow_up and v_up:
-            best = sol_up
-        elif not elbow_up and v_down:
-            best = sol_down
-        elif v_up:
-            best = sol_up
-        elif v_down:
-            best = sol_down
-        else:
-            best = sol_up if elbow_up else sol_down
-            j1, j2, j3 = best
-            return (j1, j2, j3), False, (
-                f"Límites excedidos: M1={j1:.1f}°, M2={j2:.1f}°, M3={j3:.1f}° "
-                f"(Límites M1:[{lim_m1[0]:.0f},{lim_m1[1]:.0f}] M2:[{lim_m2[0]:.0f},{lim_m2[1]:.0f}] M3:[{lim_m3[0]:.0f},{lim_m3[1]:.0f}])"
-            )
-
+        # --- PASO 5: Sin bloqueo por límites de software (regidos por switches físicos) ---
+        best = sol_up if elbow_up else sol_down
         return best, True, "OK"
 
 

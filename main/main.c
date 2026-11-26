@@ -205,8 +205,8 @@ static float g_accel_hz_per_sec = 2600.0f;
 // M1 (Base):   [-180.0°, +180.0°] (Giro completo 360°)
 // M2 (Hombro): [-90.0°,  +95.0°]
 // M3 (Codo):   [-90.0°, +100.0°]
-static float g_limit_min_deg[NUM_MOTORS] = {-180.0f, -90.0f, -90.0f};
-static float g_limit_max_deg[NUM_MOTORS] = {180.0f, 95.0f, 100.0f};
+static float g_limit_min_deg[NUM_MOTORS] = {-360.0f, -360.0f, -360.0f};
+static float g_limit_max_deg[NUM_MOTORS] = {360.0f, 360.0f, 360.0f};
 
 // Telemetría y Estado Compartido
 static as5600_reading_t g_last_reading[NUM_MOTORS] = {0};
@@ -1118,11 +1118,9 @@ static void steppers_control_task(void *pvParameters) {
       if (accel < 100.0f)
         accel = 100.0f;
 
-      // Acotamiento por límites de seguridad mecánica configurables
-      if (target < lim_min)
-        target = lim_min;
-      if (target > lim_max)
-        target = lim_max;
+      // Sin acotamiento por límites de software (regidos por switches físicos M1/M2/M3)
+      (void)lim_min;
+      (void)lim_max;
 
       int32_t pos = a->pos;
 
