@@ -48,6 +48,13 @@ Los microswitches mecánicos de **3 pines** (`COM`, `NO`, `NC`) se conectan usan
 | **SW_HOME_M2 (Hombro)** | **GPIO 21** | **GND** | Libre | **2° en secuencia** \| Retrocede hacia atrás (`CCW`) hasta presionar (`0V`), libera `+1.5°` y fija `0.0°` |
 | **SW_HOME_M1 (Base)** | **GPIO 18** | **GND** | Libre | **3° en secuencia** \| Barrido oscilatorio creciente (`±10°, ±20°, ±30°...`) hasta tocar switch frontal, libera `1.5°` y fija `0.0°` |
 
+### 3. Encoders Magnéticos AS5600 (3 Buses I2C Dedicados — Telemetría):
+| Sensor / Articulación | SDA (Datos) | SCL (Reloj) | Alimentación | Función en Firmware |
+|---|---|---|---|---|
+| **Encoder 1 (M1 Base)** | **GPIO 1** | **GPIO 2** | 3.3V / GND | Bus I2C Dedicado 1 \| Telemetría `ENC_INFO` (solo lectura) |
+| **Encoder 2 (M2 Hombro)** | **GPIO 8** | **GPIO 9** | 3.3V / GND | Bus I2C Dedicado 2 \| Telemetría `ENC_INFO` (solo lectura) |
+| **Encoder 3 (M3 Codo)** | **GPIO 10** | **GPIO 11** | 3.3V / GND | Bus I2C Dedicado 3 \| Telemetría `ENC_INFO` (solo lectura) |
+
 > **Nota de Control Motriz:** Cada motor NEMA 17 opera a **4 micropasos (800 pulsos/rev)** con reductor cicloidal **31:1**, equivalente a **24,800 micropasos/rev** en la articulación (**68.89 pasos/°**). Las rampas trapezoidales se actualizan a **100 Hz** (límite de frecuencia en firmware: `3000 Hz`).
 
 ---
