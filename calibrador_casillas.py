@@ -162,6 +162,9 @@ class CalibradorCasillasApp(tk.Tk):
         self.pkt_seq = 0
         self.motors_free_state = True
         self.gripper_state = False
+        self.gripper_open_deg = 10.0
+        self.gripper_close_deg = 90.0
+        self.current_gripper_deg = 10.0
 
         # Datos de Casillas Calibradas (1..9 + Dispensador)
         self.calibrated_cells = self.load_calibrated_cells()
@@ -195,6 +198,12 @@ class CalibradorCasillasApp(tk.Tk):
             try:
                 with open(self.calib_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    grip = data.get("gripper", {})
+                    if "open_deg" in grip:
+                        self.gripper_open_deg = float(grip["open_deg"])
+                        self.current_gripper_deg = self.gripper_open_deg
+                    if "close_deg" in grip:
+                        self.gripper_close_deg = float(grip["close_deg"])
                     for k in default_data:
                         if k in data.get("cells", {}):
                             default_data[k] = data["cells"][k]
@@ -212,6 +221,10 @@ class CalibradorCasillasApp(tk.Tk):
                 "a1": self.kin.a1,
                 "a2": self.kin.a2,
                 "a3": self.kin.a3
+            },
+            "gripper": {
+                "open_deg": round(self.gripper_open_deg, 1),
+                "close_deg": round(self.gripper_close_deg, 1)
             },
             "cells": self.calibrated_cells
         }
@@ -329,12 +342,47 @@ class CalibradorCasillasApp(tk.Tk):
 
     def toggle_gripper(self):
         self.gripper_state = not self.gripper_state
-        st = 1.0 if self.gripper_state else 0.0
-        self.send_cmd("GRIPPER", st)
+        ang = self.gripper_close_deg if self.gripper_state else self.gripper_open_deg
+        self.current_gripper_deg = ang
+        if hasattr(self, "var_gripper_deg"):
+            self.var_gripper_deg.set(f"{ang:.1f}")
+        self.send_cmd("GRIPPER", ang)
         self.btn_gripper.config(
-            text="Pinza SG90: CERRADA" if self.gripper_state else "Pinza SG90: ABIERTA",
+            text=f"Pinza SG90: CERRADA ({ang:.0f}°)" if self.gripper_state else f"Pinza SG90: ABIERTA ({ang:.0f}°)",
             bg=COLOR_GREEN if self.gripper_state else "#475569"
         )
+
+    def move_gripper_angle(self):
+        try:
+            ang = max(0.0, min(180.0, float(self.var_gripper_deg.get())))
+        except ValueError:
+            messagebox.showerror("Valor inválido", "Ingresa un ángulo válido para la pinza (0° a 180°).")
+            return
+        self.current_gripper_deg = ang
+        self.gripper_state = abs(ang - self.gripper_close_deg) < abs(ang - self.gripper_open_deg)
+        self.send_cmd("GRIPPER", ang)
+        self.btn_gripper.config(
+            text=f"Pinza SG90: {'CERRADA' if self.gripper_state else 'ABIERTA'} ({ang:.0f}°)",
+            bg=COLOR_GREEN if self.gripper_state else "#475569"
+        )
+
+    def save_gripper_preset(self, is_open):
+        try:
+            ang = max(0.0, min(180.0, float(self.var_gripper_deg.get())))
+        except ValueError:
+            messagebox.showerror("Valor inválido", "Ingresa un ángulo válido para la pinza (0° a 180°).")
+            return
+        if is_open:
+            self.gripper_open_deg = ang
+        else:
+            self.gripper_close_deg = ang
+        self.current_gripper_deg = ang
+        self.save_calibrated_cells()
+        if hasattr(self, "lbl_gripper_presets"):
+            self.lbl_gripper_presets.config(
+                text=f"Guardado -> Abierta: {self.gripper_open_deg:.0f}° | Cerrada (Agarrar): {self.gripper_close_deg:.0f}°",
+                fg=COLOR_GREEN
+            )
 
     def jog_axis(self, axis_idx, delta_deg):
         self.motors_free_state = False
@@ -368,6 +416,8 @@ class CalibradorCasillasApp(tk.Tk):
         self.calibrated_cells[str(key)] = {
             "angles": [round(q1, 2), round(q2, 2), round(q3, 2)],
             "cartesian": [round(x, 2), round(y, 2), round(z, 2)],
+            "gripper_deg": round(self.current_gripper_deg, 1),
+            "gripper_open": (not self.gripper_state),
             "recorded_at": time.strftime("%H:%M:%S")
         }
 
@@ -438,6 +488,8 @@ class CalibradorCasillasApp(tk.Tk):
         self.calibrated_cells[str(key)] = {
             "angles": [round(q1, 2), round(q2, 2), round(q3, 2)],
             "cartesian": [round(x, 2), round(y, 2), round(z, 2)],
+            "gripper_deg": round(self.current_gripper_deg, 1),
+            "gripper_open": (not self.gripper_state),
             "recorded_at": time.strftime("%H:%M:%S")
         }
         self.save_calibrated_cells()
@@ -461,6 +513,13 @@ class CalibradorCasillasApp(tk.Tk):
         q1, q2, q3 = data["angles"]
         self.motors_free_state = False
         self.send_cmd("ANGLES", q1, q2, q3)
+        if "gripper_deg" in data:
+            g_deg = float(data["gripper_deg"])
+            self.current_gripper_deg = g_deg
+            self.gripper_state = not bool(data.get("gripper_open", True))
+            if hasattr(self, "var_gripper_deg"):
+                self.var_gripper_deg.set(f"{g_deg:.1f}")
+            self.send_cmd("GRIPPER", g_deg)
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
 
     # --------------------------------------------------------------------------
@@ -882,6 +941,35 @@ class CalibradorCasillasApp(tk.Tk):
             bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Consolas", 8)
         )
         self.lbl_xyz_ik_info.pack(anchor=tk.W, pady=(2, 0))
+
+        # Calibración de Pinza Servo SG90 (Abrir / Agarrar pieza)
+        grip_row = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        grip_row.pack(fill=tk.X, pady=(5, 2))
+        tk.Label(grip_row, text="Pinza SG90 (°):", bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 3))
+        self.var_gripper_deg = tk.StringVar(value=f"{self.current_gripper_deg:.1f}")
+        tk.Entry(grip_row, textvariable=self.var_gripper_deg, width=6, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(
+            grip_row, text="Probar Pinza", bg="#0284c7", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=7, pady=2, cursor="hand2",
+            command=self.move_gripper_angle
+        ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            grip_row, text="Guardar ABIERTA", bg="#475569", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=7, pady=2, cursor="hand2",
+            command=lambda: self.save_gripper_preset(True)
+        ).pack(side=tk.LEFT, padx=2)
+        tk.Button(
+            grip_row, text="Guardar AGARRAR (Cerrada)", bg=COLOR_AMBER, fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=7, pady=2, cursor="hand2",
+            command=lambda: self.save_gripper_preset(False)
+        ).pack(side=tk.LEFT, padx=2)
+
+        self.lbl_gripper_presets = tk.Label(
+            xyz_card,
+            text=f"Abierta: {self.gripper_open_deg:.0f}° | Cerrada (Agarrar): {self.gripper_close_deg:.0f}°",
+            bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Consolas", 8)
+        )
+        self.lbl_gripper_presets.pack(anchor=tk.W, pady=(1, 0))
 
         tk.Label(
             right_col, text="MOTOR DE CINEMÁTICA INVERSA Y ANÁLISIS",
