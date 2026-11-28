@@ -6,9 +6,16 @@ echo ===========================================================================
 echo   Iniciando Calibrador de Casillas (Teach-In 1:1)...
 echo ==============================================================================
 cd /d "%~dp0"
-python calibrador_casillas.py
+set PY_CMD=python
+where python >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    where py >nul 2>&1
+    if %ERRORLEVEL% EQU 0 set PY_CMD=py
+)
+%PY_CMD% calibrador_casillas.py
 if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo [ERROR] No se pudo iniciar el script.
+    echo [ERROR] No se pudo iniciar el script. Ejecuta primero
+    echo         'instalar_dependencias.bat'.
     pause
 )
