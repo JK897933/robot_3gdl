@@ -408,6 +408,8 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.serial_port = None
         self.running = False
         self.reader_thread = None
+        self.writer_thread = None
+        self._tx_queue = queue.Queue(maxsize=128)
         self.pkt_seq = 200
         self._last_slider_tx_time = 0.0
         self._slider_tx_pending = False
@@ -611,7 +613,7 @@ class Robot3GDLGatoVisionController(tk.Tk):
         m2 = abs(self.last_backlash_offset[1]) + 1.0 if is_active else 0.0
         m3 = abs(self.last_backlash_offset[2]) + 1.0 if is_active else 0.0
 
-        cmd_q1 = max(max(-180.0, l1_min - m1), min(min(180.0, l1_max + m1), float(compensated[0])))
+        cmd_q1 = max(max(-360.0, l1_min - m1), min(min(360.0, l1_max + m1), float(compensated[0])))
         cmd_q2 = max(max(-90.0,  l2_min - m2), min(min(90.0,  l2_max + m2), float(compensated[1])))
         cmd_q3 = max(max(-90.0,  l3_min - m3), min(min(90.0,  l3_max + m3), float(compensated[2])))
         self.pkt_seq = (self.pkt_seq + 1) % 10000
@@ -637,13 +639,36 @@ class Robot3GDLGatoVisionController(tk.Tk):
         self.update_gripper_button()
 
     def send_serial_raw(self, text):
-        """Escribe una cadena de texto en bytes por el puerto serial de manera protegida."""
-        if self.serial_port and self.serial_port.is_open:
+        """Encola una cadena de texto para envío serial asíncrono sin bloquear el hilo UI."""
+        if not (self.running and self.serial_port and self.serial_port.is_open):
+            return
+        try:
+            self._tx_queue.put_nowait(text.encode('utf-8'))
+        except queue.Full:
             try:
-                self.serial_port.write(text.encode('utf-8'))
+                self._tx_queue.get_nowait()
+                self._tx_queue.put_nowait(text.encode('utf-8'))
+            except Exception:
+                pass
+
+    def serial_write_loop(self):
+        """Hilo dedicado de escritura serial para evitar congelamientos de Tkinter si el USB falla."""
+        while self.running:
+            try:
+                data = self._tx_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            sp = self.serial_port
+            if not (self.running and sp and sp.is_open):
+                break
+            try:
+                sp.write(data)
+            except serial.SerialTimeoutException:
+                print("Advertencia: timeout escribiendo al puerto serial (ESP32 ocupado o desconectado).")
             except Exception as e:
                 print(f"Error escribiendo al puerto serial: {e}")
-                self.handle_serial_disconnect()
+                self.dispatch_ui(self.handle_serial_disconnect)
+                break
 
     def refresh_ports(self):
         """Escanea los puertos serie COM disponibles priorizando el puerto USB del ESP32-S3 (COM12)."""
@@ -697,20 +722,25 @@ class Robot3GDLGatoVisionController(tk.Tk):
                     bytesize=serial.EIGHTBITS,
                     parity=serial.PARITY_NONE,
                     stopbits=serial.STOPBITS_ONE,
-                    timeout=0.1
+                    timeout=0.1,
+                    write_timeout=0.3
                 )
+                while not self._tx_queue.empty():
+                    try:
+                        self._tx_queue.get_nowait()
+                    except queue.Empty:
+                        break
                 self.running = True
                 self.btn_connect.config(text="Desconectar", bg=COLOR_RED_DANGER)
                 self.lbl_status.config(text="● CONECTADO", fg=COLOR_GREEN_SUCCESS)
                 self.reader_thread = threading.Thread(target=self.serial_read_loop, daemon=True)
                 self.reader_thread.start()
+                self.writer_thread = threading.Thread(target=self.serial_write_loop, daemon=True)
+                self.writer_thread.start()
                 self.after(350, self.query_esp32_limits)
-                # Si el ESP32 se desconectó y se vuelve a conectar o el cero ya estaba calibrado:
-                # Regresar automáticamente a la posición cero guardada (0.0°, 0.0°, 0.0°)
-                if self.zero_calibrated:
-                    self.after(600, self.cmd_load_game)
-                elif not self.zero_modal_shown:
-                    self.after(650, self.show_zero_calibration_modal)
+                # Al conectar la GUI a la ESP32-S3, ejecutar automáticamente el Homing con Switches
+                # (si la ESP32 ya está haciendo homing al arrancar, el firmware ignora duplicados).
+                self.after(600, self.cmd_homing_switches)
             except Exception as e:
                 messagebox.showerror("Error de Conexión", f"No se pudo conectar al puerto {p}:\n{e}")
         else:
@@ -725,13 +755,22 @@ class Robot3GDLGatoVisionController(tk.Tk):
             self.send_serial_raw(f"${payload}*{cs:02X}\r\n")
 
     def handle_serial_disconnect(self):
-        """Maneja el cierre seguro de la conexión serie y actualiza la interfaz gráfica."""
+        """Maneja el cierre seguro de la conexión serie y actualiza la interfaz gráfica sin bloquear."""
         self.running = False
-        try:
-            if self.serial_port and self.serial_port.is_open:
-                self.serial_port.close()
-        except Exception:
-            pass
+        sp = self.serial_port
+        self.serial_port = None
+        if sp is not None:
+            def _close_port():
+                try:
+                    if hasattr(sp, "cancel_write"):
+                        sp.cancel_write()
+                    if hasattr(sp, "cancel_read"):
+                        sp.cancel_read()
+                    if sp.is_open:
+                        sp.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_close_port, daemon=True).start()
         self.btn_connect.config(text="Conectar ESP32", bg="#0284c7")
         self.lbl_status.config(text="● DESCONECTADO", fg="#64748b")
 
@@ -2725,19 +2764,12 @@ class Robot3GDLGatoVisionController(tk.Tk):
         )
         self.lbl_zero_status.pack(side=tk.LEFT, padx=(0, 10))
 
-        self.btn_save_game = tk.Button(
-            self.zero_bar, text="Guardar Cero (0.0°)", bg="#15803d", fg="#ffffff",
-            activebackground="#047857", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
-            cursor="hand2", command=self.cmd_save_game
+        self.btn_homing_sw = tk.Button(
+            self.zero_bar, text="Home con Switches (0.0°)", bg="#b45309", fg="#ffffff",
+            activebackground="#92400e", font=("Segoe UI", 8, "bold"), padx=12, pady=2, bd=0,
+            cursor="hand2", command=self.cmd_homing_switches
         )
-        self.btn_save_game.pack(side=tk.LEFT, padx=3)
-
-        self.btn_load_game = tk.Button(
-            self.zero_bar, text="Cargar Cero (0.0°)", bg="#1e40af", fg="#ffffff",
-            activebackground="#0369a1", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
-            cursor="hand2", command=self.cmd_load_game
-        )
-        self.btn_load_game.pack(side=tk.LEFT, padx=3)
+        self.btn_homing_sw.pack(side=tk.LEFT, padx=3)
 
         self.btn_toggle_motors = tk.Button(
             self.zero_bar, text="Bloquear Motores", bg="#475569", fg="#ffffff",
@@ -2745,20 +2777,6 @@ class Robot3GDLGatoVisionController(tk.Tk):
             cursor="hand2", command=self.toggle_motors_lock_free
         )
         self.btn_toggle_motors.pack(side=tk.LEFT, padx=3)
-
-        self.btn_zero_wizard = tk.Button(
-            self.zero_bar, text="Asistente Cero", bg="#0284c7", fg="#ffffff",
-            activebackground="#6d28d9", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
-            cursor="hand2", command=self.show_zero_calibration_modal
-        )
-        self.btn_zero_wizard.pack(side=tk.LEFT, padx=(10, 4))
-
-        self.btn_homing_sw = tk.Button(
-            self.zero_bar, text="Home con Switches", bg="#b45309", fg="#ffffff",
-            activebackground="#92400e", font=("Segoe UI", 8, "bold"), padx=10, pady=2, bd=0,
-            cursor="hand2", command=self.cmd_homing_switches
-        )
-        self.btn_homing_sw.pack(side=tk.LEFT, padx=3)
 
         self.lbl_zero_quick_angles = tk.Label(
             self.zero_bar, text="M1: +0.00° | M2: +0.00° | M3: +0.00°",
@@ -3924,19 +3942,14 @@ class Robot3GDLGatoVisionController(tk.Tk):
                 la.pack()
                 ang_v2_labels.append(la)
 
-            # Botones de Calibración de Posición Cero
+            # Botón de Homing físico con Switches (único origen 0.0°)
             z_btns1 = tk.Frame(c_zero, bg=COLOR_BG_PANEL)
             z_btns1.pack(fill=tk.X, pady=(4, 2))
             tk.Button(
-                z_btns1, text="FIJAR CERO ACTUAL", bg="#15803d", fg="#ffffff",
+                z_btns1, text="HOME CON SWITCHES (CERO 0.0°)", bg="#b45309", fg="#ffffff",
                 font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=6, pady=4, cursor="hand2",
-                command=self.cmd_save_game
+                command=self.cmd_homing_switches
             ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=1)
-            tk.Button(
-                z_btns1, text="Cargar Cero (0.0°) FLASH", bg="#1e40af", fg="#ffffff",
-                font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=6, pady=4, cursor="hand2",
-                command=self.cmd_load_game
-            ).pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=1)
 
             z_btns2 = tk.Frame(c_zero, bg=COLOR_BG_PANEL)
             z_btns2.pack(fill=tk.X, pady=(2, 0))

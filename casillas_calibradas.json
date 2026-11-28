@@ -1,68 +1,61 @@
 {
-    "profile_name": "Mi Robot Gato MK2 (Base en Caja)",
-    "description": "Calibracion exacta paralelogramo: M1 [-60, 60], M2 [-60, 60], M3 [0, 45]. Tablero Z=-29.1cm",
-    "date": "2026-11-03 17:30:00",
-    "table_z": -29.1,
-    "hover_z": -25.0,
+    "profile_name": "Mi Robot Gato MK2",
+    "date": "2026-11-27 20:51:50",
     "link_lengths": {
-        "d1": 10.0,
+        "d1": 18.0,
         "a1": 11.0,
         "a2": 32.922,
         "a3": 32.934
     },
-    "joint_limits": {
-        "m1": [
-            -60.0,
-            60.0
-        ],
-        "m2": [
-            -60.0,
-            60.0
-        ],
-        "m3": [
-            0.0,
-            45.0
-        ]
+    "gripper": {
+        "open_deg": 90.0,
+        "close_deg": 0.0
     },
     "cells": {
         "1": {
             "angles": [
-                1.81,
-                -29.01,
-                44.63
+                -40.01,
+                -70.0,
+                -70.0
             ],
             "cartesian": [
-                63.2,
-                2.0,
-                -29.1
+                25.68,
+                -21.55,
+                18.01
             ],
-            "recorded_at": "Calibrado Paralelogramo MK2"
+            "gripper_deg": 10.0,
+            "gripper_open": true,
+            "recorded_at": "19:32:41"
         },
         "2": {
             "angles": [
-                0.0,
-                -28.86,
-                44.8
+                10.0,
+                -70.0,
+                -70.0
             ],
             "cartesian": [
-                63.2,
-                0.0,
-                -29.1
+                33.01,
+                5.82,
+                18.01
             ],
-            "recorded_at": "Calibrado Paralelogramo MK2"
+            "gripper_deg": 10.0,
+            "gripper_open": false,
+            "recorded_at": "19:34:20"
         },
         "3": {
             "angles": [
-                -1.81,
-                -29.01,
-                44.63
+                40.01,
+                -70.0,
+                -70.0
             ],
             "cartesian": [
-                63.2,
-                -2.0,
-                -29.1
+                25.68,
+                21.55,
+                18.01
             ],
-            "recorded_at": "Calibrado Paralelogramo MK2"
+            "gripper_deg": 10.0,
+            "gripper_open": false,
+            "recorded_at": "19:34:42"
         },
         "4": {
             "angles": [
@@ -155,17 +148,5 @@
             ],
             "recorded_at": "Calibrado Paralelogramo MK2"
         }
-    },
-    "dispenser": {
-        "pick_xyz": [
-            62.0,
-            -16.0,
-            -29.1
-        ],
-        "hover_xyz": [
-            62.0,
-            -16.0,
-            -25.0
-        ]
     }
 }

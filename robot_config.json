@@ -150,7 +150,14 @@
                 "m3_cw": 3.0,
                 "m3_ccw": 4.0
             },
-            "backlash_enabled": true
+            "backlash_enabled": true,
+            "board": {
+                "center_x": 61.2,
+                "center_y": 0.0,
+                "table_z": -21.1,
+                "spacing": 2.0,
+                "calibrated_taught": true
+            }
         },
         "PRUEBA 2": {
             "name": "PRUEBA 2",

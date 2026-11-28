@@ -32,15 +32,8 @@ static const char *TAG = "ROBOT_3GDL_GATO_S3";
 static void serial_send_raw(const char *buf, size_t len) {
   if (!buf || len == 0)
     return;
-  // 1. Transmitir por UART0 (Pines 43/44 si se usa adaptador FTDI/CH340)
-  uart_write_bytes(UART_NUM_0, buf, len);
-  // 2. Transmitir directamente por FIFO de hardware USB Serial/JTAG (COM12
-  // Nativo)
-  if (usb_serial_jtag_ll_txfifo_writable()) {
-    usb_serial_jtag_ll_write_txfifo((const uint8_t *)buf, (uint32_t)len);
-    usb_serial_jtag_ll_txfifo_flush();
-  }
-  // 3. Salida estándar stdout VFS
+  // Salida estándar stdout VFS: ESP-IDF enruta limpiamente a UART0 y al
+  // USB Serial/JTAG nativo secundario (COM12) sin corromper ni duplicar el FIFO.
   fwrite(buf, 1, len, stdout);
   fflush(stdout);
 }
@@ -120,8 +113,8 @@ static void serial_printf(const char *fmt, ...) {
 #define SERVO_LEDC_CHANNEL LEDC_CHANNEL_0
 #define SERVO_LEDC_RES LEDC_TIMER_14_BIT
 #define SERVO_FREQ_HZ 50
-#define SERVO_ANGLE_OPEN_DEG 10.0f
-#define SERVO_ANGLE_CLOSE_DEG 90.0f
+#define SERVO_ANGLE_OPEN_DEG 90.0f
+#define SERVO_ANGLE_CLOSE_DEG 0.0f
 
 // Switches de Límite para Homing (Activos en BAJO con Pull-Up interno a GND)
 #define SW_HOME_M1_IO GPIO_NUM_18
@@ -248,9 +241,15 @@ static const gpio_num_t g_ol_pul_pins[NUM_MOTORS] = {M1_PIN_PUL, M2_PIN_PUL,
                                                      M3_PIN_PUL};
 static const gpio_num_t g_ol_dir_pins[NUM_MOTORS] = {M1_PIN_DIR, M2_PIN_DIR,
                                                      M3_PIN_DIR};
+// Inversión de polaridad física de DIR (1 = invertir pin DIR respecto a sentido lógico):
+// M1: 1, M2: 0, M3: 1 -> M2 y M3 van juntos hacia atrás en run_dir=1 (hacia switches Home)
+static const int g_ol_dir_invert[NUM_MOTORS] = {1, 0, 1};
 static const gpio_num_t g_home_sw_pins[NUM_MOTORS] = {
     SW_HOME_M1_IO, SW_HOME_M2_IO, SW_HOME_M3_IO};
 static volatile bool g_homing_active = false;
+static volatile bool g_homing_abort = false;
+static volatile uint8_t g_sw_low_cnt[NUM_MOTORS] = {0, 0, 0};
+static volatile bool g_sw_debounced[NUM_MOTORS] = {false, false, false};
 
 static inline float ol_steps_per_deg(int i) {
   float ratio = (i >= 0 && i < NUM_MOTORS && g_gear_ratio[i] > 0.001f)
@@ -274,6 +273,19 @@ static bool IRAM_ATTR ol_step_isr(gptimer_handle_t timer,
                                   const gptimer_alarm_event_data_t *edata,
                                   void *user_ctx) {
   for (int i = 0; i < NUM_MOTORS; i++) {
+    // Filtro antirrebote/anti-EMI rápido por eje (8 ticks * 25us = 200us continuos en LOW)
+    if (gpio_get_level(g_home_sw_pins[i]) == 0) {
+      if (g_sw_low_cnt[i] < 8) {
+        g_sw_low_cnt[i]++;
+      }
+      if (g_sw_low_cnt[i] >= 8) {
+        g_sw_debounced[i] = true;
+      }
+    } else {
+      g_sw_low_cnt[i] = 0;
+      g_sw_debounced[i] = false;
+    }
+
     ol_axis_t *a = &g_ol_axis[i];
     if (a->zero_req) {
       a->pos = 0;
@@ -293,9 +305,19 @@ static bool IRAM_ATTR ol_step_isr(gptimer_handle_t timer,
       continue;
     }
     int dir = a->run_dir;
-    if (dir != a->dir_level) {
-      gpio_set_level(g_ol_dir_pins[i], dir);
-      a->dir_level = dir;
+    // Protección de paro total por hardware (con filtro anti-EMI de 200us) en M2 y M3:
+    // Si el switch está presionado de forma estable, bloquear cualquier paso hacia atrás (dir == 1).
+    // Solo permitir movimiento hacia adelante (dir == 0) para despegar del switch.
+    if ((i == 1 || i == 2) && dir == 1 && g_sw_debounced[i]) {
+      a->speed_hz = 0;
+      a->target = a->pos;
+      a->phase = 0;
+      continue;
+    }
+    int hw_dir = dir ^ g_ol_dir_invert[i];
+    if (hw_dir != a->dir_level) {
+      gpio_set_level(g_ol_dir_pins[i], hw_dir);
+      a->dir_level = hw_dir;
       a->dir_settle = 2;
       continue;
     }
@@ -731,9 +753,9 @@ static esp_err_t as5600_read_motor(int motor_idx, as5600_reading_t *out) {
 static esp_err_t gripper_set_angle(float angle_deg) {
   if (angle_deg < 0.0f) angle_deg = 0.0f;
   if (angle_deg > 180.0f) angle_deg = 180.0f;
-  // SG90: 500 us (0 deg) a 2500 us (180 deg) en periodo de 20,000 us (50 Hz)
-  float pulse_us = 500.0f + (angle_deg / 180.0f) * 2000.0f;
-  uint32_t max_duty = (1U << 14) - 1;
+  // SG90 estándar estable: 600 us (0 deg) a 2400 us (180 deg) en periodo de 20,000 us (50 Hz)
+  float pulse_us = 600.0f + (angle_deg / 180.0f) * 1800.0f;
+  uint32_t max_duty = (1U << SERVO_LEDC_RES) - 1;
   uint32_t duty = (uint32_t)((pulse_us / 20000.0f) * (float)max_duty);
   esp_err_t err = ledc_set_duty(SERVO_LEDC_MODE, SERVO_LEDC_CHANNEL, duty);
   if (err == ESP_OK) {
@@ -748,12 +770,13 @@ static void gripper_set_state(bool close_pinza) {
 }
 
 static esp_err_t gripper_servo_init(void) {
+  gpio_reset_pin(PIN_TOOL_GRIPPER);
   ledc_timer_config_t timer_conf = {
       .speed_mode = SERVO_LEDC_MODE,
       .timer_num = SERVO_LEDC_TIMER,
       .duty_resolution = SERVO_LEDC_RES,
       .freq_hz = SERVO_FREQ_HZ,
-      .clk_cfg = LEDC_AUTO_CLK,
+      .clk_cfg = LEDC_USE_XTAL_CLK, // Cristal exacto 40 MHz (evita deriva del RC interno)
   };
   esp_err_t err = ledc_timer_config(&timer_conf);
   if (err != ESP_OK) return err;
@@ -775,9 +798,11 @@ static esp_err_t gripper_servo_init(void) {
 }
 
 static esp_err_t steppers_hardware_init(void) {
-  uint64_t pin_mask = (1ULL << M1_PIN_DIR) | (1ULL << M1_PIN_ENA) |
+  uint64_t pin_mask = (1ULL << M1_PIN_PUL) | (1ULL << M1_PIN_DIR) |
+                      (1ULL << M1_PIN_ENA) | (1ULL << M2_PIN_PUL) |
                       (1ULL << M2_PIN_DIR) | (1ULL << M2_PIN_ENA) |
-                      (1ULL << M3_PIN_DIR) | (1ULL << M3_PIN_ENA);
+                      (1ULL << M3_PIN_PUL) | (1ULL << M3_PIN_DIR) |
+                      (1ULL << M3_PIN_ENA);
 
   gpio_config_t io_conf = {
       .pin_bit_mask = pin_mask,
@@ -802,7 +827,7 @@ static esp_err_t steppers_hardware_init(void) {
   gpio_set_level(M3_PIN_ENA, 0);
   ESP_ERROR_CHECK(gripper_servo_init());
   for (int i = 0; i < NUM_MOTORS; i++) {
-    g_ol_axis[i].dir_level = 0;
+    g_ol_axis[i].dir_level = -1;
     g_ol_axis[i].run_dir = 0;
   }
 
@@ -1150,6 +1175,18 @@ static void steppers_control_task(void *pvParameters) {
       int32_t err = tgt_steps - pos;
       motor_state_t st = MOTOR_STATE_IN_POSITION;
 
+      // Hard-stop direccional en M2 y M3 usando lectura con filtro anti-EMI:
+      // Si el switch trasero está presionado, bloquear avance hacia atrás (err > 0)
+      // sin borrar el cero de referencia, permitiendo solo avanzar hacia adelante (err < 0).
+      if ((i == 1 || i == 2) && err > 0 && g_sw_debounced[i]) {
+        err = 0;
+        tgt_steps = pos;
+        if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+          g_target_deg[i] = ol_pos_deg(i);
+          xSemaphoreGive(g_data_mutex);
+        }
+      }
+
       if (err == 0) {
         cur_speed[i] = 0.0f;
         a->speed_hz = 0;
@@ -1217,6 +1254,8 @@ static void homing_sequence_task(void *pvParameters) {
     return;
   }
   g_homing_active = true;
+  g_homing_abort = false;
+  gripper_set_state(false); // Abrir la pinza automáticamente al iniciar Home con Switches
   ESP_LOGI(TAG, "Iniciando Homing automático con switches (M3 -> M2 -> M1)...");
 
   for (int m = 0; m < NUM_MOTORS; m++) {
@@ -1229,67 +1268,151 @@ static void homing_sequence_task(void *pvParameters) {
   }
   vTaskDelay(pdMS_TO_TICKS(50));
 
-  const int order[NUM_MOTORS] = {2, 1, 0}; // M3 (Codo), M2 (Hombro), M1 (Base)
   bool all_ok = true;
 
-  for (int idx = 0; idx < NUM_MOTORS; idx++) {
-    int i = order[idx];
-    ol_axis_t *a = &g_ol_axis[i];
-    float spd_per_deg = ol_steps_per_deg(i);
+  // --------------------------------------------------------------------------
+  // FASE 1: Secuencial M3 (Codo) -> luego M2 (Hombro) hacia atrás (run_dir = 1)
+  //         Espera indefinidamente hasta tocar cada switch (funciona tanto si
+  //         conectas primero 24V como si conectas primero la ESP32 y luego 24V).
+  //         Hard-stop instantáneo en ISR + cancelable con STOP / MOTORES LIBRES.
+  // --------------------------------------------------------------------------
+  const int seq_axes[2] = {2, 1}; // 1° M3 (Codo), 2° M2 (Hombro)
+  for (int s = 0; s < 2 && all_ok && !g_homing_abort; s++) {
+    int ax = seq_axes[s];
+    ol_axis_t *a = &g_ol_axis[ax];
+    float spd_per_deg = ol_steps_per_deg(ax);
 
-    if (i == 0) {
-      // M1 (Base circular): barrido oscilatorio creciente Izq (-10°) / Der
-      // (+10°), sumando 10° en cada ciclo (±10°, ±20°, ±30°... hasta ±180°)
-      // hasta tocar el switch.
-      bool found = limit_switch_is_pressed(0);
-      int hit_dir = 0;
-      int32_t center_pos = a->pos;
+    if (!limit_switch_is_pressed(ax)) {
+      uint32_t ramp_hz = 80;
+      a->run_dir = 1;
+      a->target = a->pos + 10000;
+      a->speed_hz = ramp_hz;
 
-      for (float amp_deg = 10.0f; !found && amp_deg <= 180.0f;
-           amp_deg += 10.0f) {
-        const int dirs[2] = {0, 1}; // 0 = Izquierda (-), 1 = Derecha (+)
-        for (int d_idx = 0; d_idx < 2 && !found; d_idx++) {
-          int dir = dirs[d_idx];
-          int32_t offset = (int32_t)lroundf(amp_deg * spd_per_deg);
-          a->run_dir = dir;
-          a->target =
-              (dir == 0) ? (center_pos - offset) : (center_pos + offset);
-          a->speed_hz = 600;
-
-          int debounce = 0;
-          int seg_timeout_ms = 12000;
-          while (seg_timeout_ms > 0) {
-            if (limit_switch_is_pressed(0)) {
-              debounce++;
-              if (debounce >= 3) {
-                found = true;
-                hit_dir = dir;
-                break;
-              }
-            } else {
-              debounce = 0;
-            }
-            if (dir ? (a->pos >= a->target) : (a->pos <= a->target)) {
-              break; // Llegó al extremo de este barrido
-            }
-            vTaskDelay(pdMS_TO_TICKS(5));
-            seg_timeout_ms -= 5;
-          }
-          a->speed_hz = 0;
-          vTaskDelay(pdMS_TO_TICKS(50));
+      int deb = 0;
+      while (!g_homing_abort) {
+        if (ramp_hz < 450) {
+          ramp_hz += 25;
+          if (ramp_hz > 450)
+            ramp_hz = 450;
         }
+        if (limit_switch_is_pressed(ax)) {
+          deb++;
+          if (deb >= 2) {
+            a->speed_hz = 0;
+            ESP_LOGI(TAG, "Switch Home M%d detectado.", ax + 1);
+            break;
+          }
+        } else {
+          deb = 0;
+          a->target = a->pos + 10000;
+          a->speed_hz = ramp_hz;
+        }
+        vTaskDelay(1); // 10 ms reales (CONFIG_FREERTOS_HZ=100)
       }
+      a->speed_hz = 0;
+      vTaskDelay(pdMS_TO_TICKS(60));
+    }
 
-      if (!found) {
-        ESP_LOGE(
-            TAG,
-            "Timeout en Homing oscilatorio de M1: switch GPIO %d no detectado.",
-            g_home_sw_pins[0]);
-        printf("$ALARM,HOMING_TIMEOUT,M1*00\r\n");
-        all_ok = false;
-        break;
+    if (g_homing_abort) {
+      all_ok = false;
+      break;
+    }
+
+    // Liberar el switch hacia adelante (run_dir = 0) + 1.5° extra
+    a->run_dir = 0;
+    a->target = a->pos - (int32_t)(5.0f * spd_per_deg);
+    a->speed_hz = 250;
+    int64_t rel_start_us = esp_timer_get_time();
+    while (!g_homing_abort && limit_switch_is_pressed(ax) &&
+           (esp_timer_get_time() - rel_start_us) < 3000000LL) {
+      vTaskDelay(1);
+    }
+    if (!g_homing_abort) {
+      a->target = a->pos - (int32_t)(1.5f * spd_per_deg);
+      int64_t ext_start_us = esp_timer_get_time();
+      while (!g_homing_abort && a->pos > a->target &&
+             (esp_timer_get_time() - ext_start_us) < 800000LL) {
+        vTaskDelay(1);
       }
+    }
+    a->speed_hz = 0;
+    vTaskDelay(pdMS_TO_TICKS(60));
 
+    if (g_homing_abort) {
+      all_ok = false;
+      break;
+    }
+
+    ol_set_zero(ax);
+    if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      g_target_deg[ax] = 0.0f;
+      g_current_error[ax] = 0.0f;
+      g_current_speed_hz[ax] = 0;
+      g_motor_state[ax] = MOTOR_STATE_IN_POSITION;
+      as5600_reset_zero_calibration(ax);
+      xSemaphoreGive(g_data_mutex);
+    }
+    ESP_LOGI(TAG, "Homing M%d completado y fijado en 0.00°.", ax + 1);
+  }
+
+  // --------------------------------------------------------------------------
+  // FASE 2: M1 (Base circular) - barrido oscilatorio simétrico creciente
+  //         (±15°, ±35°, ±65°, ±100°, ±140°, ±180°) centrado en la posición
+  //         inicial: cubre los 360° completos SIN pasarse hacia un solo lado.
+  // --------------------------------------------------------------------------
+  if (all_ok && !g_homing_abort) {
+    int i = 0;
+    ol_axis_t *a = &g_ol_axis[0];
+    float spd_per_deg = ol_steps_per_deg(0);
+
+    bool found = limit_switch_is_pressed(0);
+    int hit_dir = 0;
+    int32_t center_pos = a->pos;
+
+    const float sweep_amps[6] = {15.0f, 35.0f, 65.0f, 100.0f, 140.0f, 180.0f};
+    for (int s = 0; s < 6 && !found && !g_homing_abort; s++) {
+      const int dirs[2] = {0, 1}; // 0 = Izquierda (-), 1 = Derecha (+)
+      for (int d_idx = 0; d_idx < 2 && !found && !g_homing_abort; d_idx++) {
+        int dir = dirs[d_idx];
+        int32_t offset = (int32_t)lroundf(sweep_amps[s] * spd_per_deg);
+        a->run_dir = dir;
+        a->target = (dir == 0) ? (center_pos - offset) : (center_pos + offset);
+        uint32_t m1_hz = 100;
+        a->speed_hz = m1_hz;
+
+        int64_t seg_start_us = esp_timer_get_time();
+        while (!g_homing_abort &&
+               (esp_timer_get_time() - seg_start_us) < 60000000LL) {
+          if (m1_hz < 500) {
+            m1_hz += 30;
+            if (m1_hz > 500)
+              m1_hz = 500;
+            a->speed_hz = m1_hz;
+          }
+          if (limit_switch_is_pressed(0)) {
+            a->speed_hz = 0;
+            found = true;
+            hit_dir = dir;
+            break;
+          }
+          if (dir ? (a->pos >= a->target) : (a->pos <= a->target)) {
+            break;
+          }
+          vTaskDelay(1);
+        }
+        a->speed_hz = 0;
+        vTaskDelay(pdMS_TO_TICKS(50));
+      }
+    }
+
+    if (!found) {
+      ESP_LOGE(
+          TAG,
+          "Timeout en Homing oscilatorio de M1: switch GPIO %d no detectado.",
+          g_home_sw_pins[0]);
+      printf("$ALARM,HOMING_TIMEOUT,M1*00\r\n");
+      all_ok = false;
+    } else {
       // Retroceder ligeramente en sentido contrario al que tocó el switch hasta
       // liberar + 1.5°
       int back_dir = (hit_dir == 0) ? 1 : 0;
@@ -1297,88 +1420,44 @@ static void homing_sequence_task(void *pvParameters) {
       int32_t back_5 = (int32_t)lroundf(5.0f * spd_per_deg);
       a->target = back_dir ? (a->pos + back_5) : (a->pos - back_5);
       a->speed_hz = 250;
-      int release_ms = 3000;
-      while (release_ms > 0 && limit_switch_is_pressed(0)) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-        release_ms -= 5;
+      int64_t rel_start_us = esp_timer_get_time();
+      while ((esp_timer_get_time() - rel_start_us) < 3000000LL &&
+             limit_switch_is_pressed(0)) {
+        vTaskDelay(1);
       }
       int32_t extra_1_5 = (int32_t)lroundf(1.5f * spd_per_deg);
       a->target = back_dir ? (a->pos + extra_1_5) : (a->pos - extra_1_5);
-      int extra_ms = 600;
-      while (extra_ms > 0 &&
+      int64_t ext_start_us = esp_timer_get_time();
+      while ((esp_timer_get_time() - ext_start_us) < 800000LL &&
              (back_dir ? (a->pos < a->target) : (a->pos > a->target))) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-        extra_ms -= 5;
+        vTaskDelay(1);
       }
       a->speed_hz = 0;
       vTaskDelay(pdMS_TO_TICKS(60));
-    } else {
-      // M3 (Codo) y M2 (Hombro): mover hacia atrás (CCW, run_dir = 0) hasta
-      // presionar el switch
-      if (!limit_switch_is_pressed(i)) {
-        a->run_dir = 0;
-        a->target = a->pos - (int32_t)(360.0f * spd_per_deg);
-        a->speed_hz = 450;
 
-        int debounce = 0;
-        int timeout_ms = 25000;
-        while (timeout_ms > 0) {
-          if (limit_switch_is_pressed(i)) {
-            debounce++;
-            if (debounce >= 3)
-              break;
-          } else {
-            debounce = 0;
-          }
-          vTaskDelay(pdMS_TO_TICKS(5));
-          timeout_ms -= 5;
-        }
-        a->speed_hz = 0;
-        vTaskDelay(pdMS_TO_TICKS(60));
-
-        if (timeout_ms <= 0) {
-          ESP_LOGE(TAG,
-                   "Timeout en Homing de M%d: switch GPIO %d no detectado.",
-                   i + 1, g_home_sw_pins[i]);
-          printf("$ALARM,HOMING_TIMEOUT,M%d*00\r\n", i + 1);
-          all_ok = false;
-          break;
-        }
+      ol_set_zero(i);
+      if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        g_target_deg[i] = 0.0f;
+        g_current_error[i] = 0.0f;
+        g_current_speed_hz[i] = 0;
+        g_motor_state[i] = MOTOR_STATE_IN_POSITION;
+        as5600_reset_zero_calibration(i);
+        xSemaphoreGive(g_data_mutex);
       }
-
-      // Retroceder ligeramente en sentido positivo (CW, run_dir = 1) hasta
-      // liberar + 1.5°
-      a->run_dir = 1;
-      a->target = a->pos + (int32_t)(5.0f * spd_per_deg);
-      a->speed_hz = 250;
-      int release_ms = 3000;
-      while (release_ms > 0 && limit_switch_is_pressed(i)) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-        release_ms -= 5;
-      }
-      a->target = a->pos + (int32_t)(1.5f * spd_per_deg);
-      int extra_ms = 600;
-      while (extra_ms > 0 && a->pos < a->target) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-        extra_ms -= 5;
-      }
-      a->speed_hz = 0;
-      vTaskDelay(pdMS_TO_TICKS(60));
+      ESP_LOGI(TAG, "Homing M1 completado y fijado en 0.00°.");
     }
-
-    // Establecer 0.0° en micropasos y también en lectura informativa AS5600
-    ol_set_zero(i);
-    if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-      g_target_deg[i] = 0.0f;
-      g_current_error[i] = 0.0f;
-      g_current_speed_hz[i] = 0;
-      g_motor_state[i] = MOTOR_STATE_IN_POSITION;
-      as5600_reset_zero_calibration(i);
-      xSemaphoreGive(g_data_mutex);
-    }
-    ESP_LOGI(TAG, "Homing M%d completado y fijado en 0.00°.", i + 1);
   }
 
+  if (!all_ok) {
+    // Si hubo timeout en algún eje, fijar target a la posición actual para evitar retroceso brusco
+    if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+      for (int m = 0; m < NUM_MOTORS; m++) {
+        g_target_deg[m] = ol_pos_deg(m);
+        g_ol_axis[m].target = g_ol_axis[m].pos;
+      }
+      xSemaphoreGive(g_data_mutex);
+    }
+  }
   g_homing_active = false;
   if (all_ok) {
     printf("$ACK,0,HOMING_OK*00\r\n");
@@ -1779,7 +1858,12 @@ void app_main(void) {
                       printf("$NACK,%d,ERR_CELL_OUT_OF_RANGE*00\r\n", seq);
                     }
 
-                    // 4. Control de la Pinza Servo SG90 (0=Abrir, 1=Cerrar, >1=Ángulo 0..180°)
+                    // 4. Control de la Pinza Servo SG90 (GRIPPER: 0=Abrir, 1=Cerrar, >1=Ángulo; GRIPPER_ANG: ángulo exacto 0..180°)
+                  } else if (strcmp(cmd, "GRIPPER_ANG") == 0) {
+                    g_gripper_active = (fabsf(p1 - SERVO_ANGLE_CLOSE_DEG) < fabsf(p1 - SERVO_ANGLE_OPEN_DEG));
+                    gripper_set_angle(p1);
+                    printf("$ACK,%d,GRIPPER_OK,%.1f*00\r\n", seq, p1);
+
                   } else if (strcmp(cmd, "GRIPPER") == 0) {
                     if (p1 > 1.5f) {
                       g_gripper_active = true;
@@ -1795,6 +1879,7 @@ void app_main(void) {
                   } else if (strcmp(cmd, "STOP") == 0 ||
                              strcmp(cmd, "ESTOP") == 0 ||
                              strcmp(cmd, "BRAKE") == 0) {
+                    g_homing_abort = true;
                     if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) ==
                         pdTRUE) {
                       if (motor_id == 0) {
@@ -1884,6 +1969,7 @@ void app_main(void) {
                   } else if (strcmp(cmd, "FREE") == 0 ||
                              strcmp(cmd, "MOTORS_FREE") == 0 ||
                              strcmp(cmd, "TORQUE_OFF") == 0) {
+                    g_homing_abort = true;
                     if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) ==
                         pdTRUE) {
                       for (int ax = 0; ax < NUM_MOTORS; ax++) {
@@ -2349,9 +2435,9 @@ void app_main(void) {
       }
     }
 
-    // --- B. Telemetría Periódica a 10 Hz (100 ms con bucle de 5 ms) ---
+    // --- B. Telemetría Periódica a 10 Hz (100 ms con bucle de 10 ms / 1 tick) ---
     telemetry_timer++;
-    if (telemetry_timer >= 20) {
+    if (telemetry_timer >= 10) {
       telemetry_timer = 0;
 
       // 1. Trama Enmarcada $TEL3 para GUI (posición controlada por micropasos
@@ -2460,7 +2546,6 @@ void app_main(void) {
       fflush(stdout);
     }
 
-    vTaskDelay(
-        pdMS_TO_TICKS(5)); // Bucle de procesamiento serie ultra-rápido a 200 Hz
+    vTaskDelay(1); // 10 ms reales (1 tick con CONFIG_FREERTOS_HZ=100)
   }
 }

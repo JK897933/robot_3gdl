@@ -158,13 +158,19 @@ class CalibradorCasillasApp(tk.Tk):
         # Estado Serial y Encoders
         self.serial_port = None
         self.serial_running = False
+        self._user_disconnected = True
+        self._last_port = None
+        self._serial_lock = threading.Lock()
+        self._tx_queue = queue.Queue(maxsize=128)
+        self.tx_thread = None
         self.current_angles = [0.0, 0.0, 0.0]
+        self.target_angles = [0.0, 0.0, 0.0]
         self.pkt_seq = 0
         self.motors_free_state = True
         self.gripper_state = False
-        self.gripper_open_deg = 10.0
-        self.gripper_close_deg = 90.0
-        self.current_gripper_deg = 10.0
+        self.gripper_open_deg = 90.0
+        self.gripper_close_deg = 0.0
+        self.current_gripper_deg = 90.0
 
         # Datos de Casillas Calibradas (1..9 + Dispensador)
         self.calibrated_cells = self.load_calibrated_cells()
@@ -241,80 +247,254 @@ class CalibradorCasillasApp(tk.Tk):
         return cs
 
     def send_cmd(self, cmd_name, p1=0.0, p2=0.0, p3=0.0, motor_id=0):
-        if not self.serial_port or not self.serial_port.is_open:
+        if not (self.serial_running and self.serial_port and self.serial_port.is_open):
             return
         self.pkt_seq = (self.pkt_seq + 1) % 10000
         payload = f"PKT,{self.pkt_seq},{motor_id},{cmd_name},{p1:.2f},{p2:.2f},{p3:.2f}"
         cs = self.calculate_checksum(payload)
         line = f"${payload}*{cs:02X}\r\n"
         try:
-            self.serial_port.write(line.encode("utf-8"))
-        except Exception as e:
-            print(f"Error TX Serial: {e}")
+            self._tx_queue.put_nowait(line.encode("utf-8"))
+        except queue.Full:
+            try:
+                self._tx_queue.get_nowait()
+                self._tx_queue.put_nowait(line.encode("utf-8"))
+            except Exception:
+                pass
+
+    def serial_tx_loop(self):
+        """Hilo de escritura serial no bloqueante para evitar que Tkinter deje de responder."""
+        while self.serial_running:
+            try:
+                data = self._tx_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            sp = self.serial_port
+            if not (self.serial_running and sp and sp.is_open):
+                break
+            try:
+                with self._serial_lock:
+                    sp.write(data)
+            except serial.SerialTimeoutException:
+                print("Advertencia: timeout TX Serial (ESP32 ocupado o desconectado).")
+            except Exception as e:
+                print(f"Error TX Serial: {e}")
+                self.after(0, lambda: self._handle_serial_disconnect(auto_retry=True))
+                break
+
+    def _handle_serial_disconnect(self, auto_retry=False):
+        self.serial_running = False
+        sp = self.serial_port
+        self.serial_port = None
+        if sp is not None:
+            def _close():
+                try:
+                    if hasattr(sp, "cancel_write"):
+                        sp.cancel_write()
+                    if hasattr(sp, "cancel_read"):
+                        sp.cancel_read()
+                    if sp.is_open:
+                        sp.close()
+                except Exception:
+                    pass
+            threading.Thread(target=_close, daemon=True).start()
+        if auto_retry and not self._user_disconnected and self._last_port:
+            self.btn_connect.config(text="Cancelar", bg=COLOR_AMBER, fg="#ffffff")
+            self.lbl_status.config(text=f"[RECONECTANDO {self._last_port}...]", fg=COLOR_AMBER)
+            self.after(1500, self._try_auto_reconnect)
+        else:
+            self.btn_connect.config(text="Conectar ESP32", bg=COLOR_ACCENT, fg="#ffffff")
+            self.lbl_status.config(text="[DESCONECTADO]", fg=COLOR_TEXT_MUTED)
+
+    def _try_auto_reconnect(self):
+        if self._user_disconnected or self.serial_running or not self._last_port:
+            return
+        try:
+            self.serial_port = serial.Serial(
+                port=self._last_port, baudrate=115200, timeout=0.1, write_timeout=0.3
+            )
+            while not self._tx_queue.empty():
+                try:
+                    self._tx_queue.get_nowait()
+                except queue.Empty:
+                    break
+            self.serial_running = True
+            self.btn_connect.config(text="Desconectar", bg=COLOR_RED, fg="#ffffff")
+            self.lbl_status.config(text=f"[CONECTADO {self._last_port}]", fg=COLOR_GREEN)
+            self.rx_thread = threading.Thread(target=self.serial_rx_loop, daemon=True)
+            self.rx_thread.start()
+            self.tx_thread = threading.Thread(target=self.serial_tx_loop, daemon=True)
+            self.tx_thread.start()
+        except Exception:
+            self.after(1500, self._try_auto_reconnect)
 
     def refresh_ports(self):
         if not serial:
             return
-        ports = [p.device for p in serial.tools.list_ports.comports()]
-        self.combo_ports["values"] = ports
-        if ports:
-            # Priorizar puertos típicos de ESP32
-            preferred = None
-            for p in ports:
-                if "COM4" in p or "COM12" in p:
-                    preferred = p
-                    break
-            self.combo_ports.set(preferred or ports[0])
+        comports = list(serial.tools.list_ports.comports())
+        usb_ports = []
+        other_ports = []
+        preferred = None
+        for p in comports:
+            desc = (p.description or "").upper()
+            hwid = (p.hwid or "").upper()
+            is_bt = ("BLUETOOTH" in desc or "BTHENUM" in hwid or "VÍNCULO" in desc or "VINCULO" in desc)
+            is_esp32 = ("303A" in hwid or "ESP32" in desc or "JTAG" in desc)
+            if is_esp32:
+                preferred = p.device
+                usb_ports.insert(0, p.device)
+            elif not is_bt and ("USB" in desc or "UART" in desc or "CH340" in desc or "CP210" in desc):
+                usb_ports.append(p.device)
+            else:
+                other_ports.append(p.device)
+        final_ports = usb_ports + other_ports
+        self.combo_ports["values"] = final_ports
+        if preferred or final_ports:
+            self.combo_ports.set(preferred or (usb_ports[0] if usb_ports else final_ports[0]))
 
     def toggle_connection(self):
         if not serial:
             messagebox.showerror("Error", "pyserial no está instalado.")
             return
 
-        if not self.serial_running:
+        if not self.serial_running and self._user_disconnected:
             port = self.combo_ports.get()
             if not port:
                 messagebox.showwarning("Aviso", "Selecciona un puerto COM.")
                 return
             try:
-                self.serial_port = serial.Serial(port=port, baudrate=115200, timeout=0.1)
+                self.serial_port = serial.Serial(
+                    port=port, baudrate=115200, timeout=0.1, write_timeout=0.3
+                )
+                while not self._tx_queue.empty():
+                    try:
+                        self._tx_queue.get_nowait()
+                    except queue.Empty:
+                        break
+                self._user_disconnected = False
+                self._last_port = port
                 self.serial_running = True
                 self.btn_connect.config(text="Desconectar", bg=COLOR_RED, fg="#ffffff")
                 self.lbl_status.config(text=f"[CONECTADO {port}]", fg=COLOR_GREEN)
                 self.rx_thread = threading.Thread(target=self.serial_rx_loop, daemon=True)
                 self.rx_thread.start()
-                # Pedir que motores arranquen libres para mover a mano
-                self.after(300, self.cmd_motors_free)
+                self.tx_thread = threading.Thread(target=self.serial_tx_loop, daemon=True)
+                self.tx_thread.start()
+                # Al conectar, ejecutar Homing con Switches para fijar (0.0°, 0.0°, 0.0°) real
+                self.after(500, self.cmd_homing_switches)
             except Exception as e:
                 messagebox.showerror("Error de Conexión", f"No se pudo abrir {port}:\n{e}")
         else:
-            self.serial_running = False
-            if self.serial_port and self.serial_port.is_open:
-                try:
-                    self.serial_port.close()
-                except Exception:
-                    pass
-            self.btn_connect.config(text="Conectar ESP32", bg=COLOR_ACCENT, fg="#ffffff")
-            self.lbl_status.config(text="[DESCONECTADO]", fg=COLOR_TEXT_MUTED)
+            self._user_disconnected = True
+            self._handle_serial_disconnect(auto_retry=False)
 
     def serial_rx_loop(self):
-        while self.serial_running and self.serial_port and self.serial_port.is_open:
+        err_cnt = 0
+        rx_buf = b""
+        while self.serial_running:
+            sp = self.serial_port
+            if not (sp and sp.is_open):
+                break
             try:
-                line = self.serial_port.readline().decode("utf-8", errors="ignore").strip()
-                if not line:
+                chunk = b""
+                with self._serial_lock:
+                    n = sp.in_waiting
+                    if n > 0:
+                        chunk = sp.read(min(n, 512))
+                if not chunk:
+                    time.sleep(0.01)
                     continue
-                if line.startswith("$") and "*" in line:
-                    star = line.rfind("*")
-                    payload = line[1:star]
-                    parts = payload.split(",")
-                    if parts[0] == "TEL3" and len(parts) >= 10:
-                        self.current_angles[0] = float(parts[2])
-                        self.current_angles[1] = float(parts[5])
-                        self.current_angles[2] = float(parts[8])
-                        if len(parts) > 10:
-                            self.gripper_state = (parts[10] == "1")
+                err_cnt = 0
+                rx_buf += chunk
+                while b"\n" in rx_buf:
+                    raw_line, rx_buf = rx_buf.split(b"\n", 1)
+                    line = raw_line.decode("utf-8", errors="ignore").strip()
+                    if not line:
+                        continue
+                    if line.startswith("$") and "*" in line:
+                        star = line.rfind("*")
+                        payload = line[1:star]
+                        parts = payload.split(",")
+                        if parts[0] == "TEL3" and len(parts) >= 10:
+                            self.current_angles[0] = float(parts[2])
+                            self.current_angles[1] = float(parts[5])
+                            self.current_angles[2] = float(parts[8])
+                        elif parts[0] == "SW" and len(parts) >= 4:
+                            sw = [int(parts[1]), int(parts[2]), int(parts[3])]
+                            txt = f"SW: M1[{sw[0]}] M2[{sw[1]}] M3[{sw[2]}]"
+                            fg = COLOR_GREEN if any(sw) else COLOR_TEXT_MUTED
+                            self.after(0, lambda t=txt, c=fg: hasattr(self, "lbl_sw_status") and self.lbl_sw_status.config(text=t, fg=c))
+                        elif parts[0] == "ACK" and len(parts) >= 3 and parts[2] == "HOMING_OK":
+                            self.after(0, lambda: self._on_homing_result(True, ""))
+                        elif parts[0] == "ALARM" and len(parts) >= 3 and parts[1] == "HOMING_TIMEOUT":
+                            ax = parts[2]
+                            self.after(0, lambda a=ax: self._on_homing_result(False, a))
+            except serial.SerialException:
+                err_cnt += 1
+                if err_cnt >= 3:
+                    self.after(0, lambda: self._handle_serial_disconnect(auto_retry=True))
+                    break
+                time.sleep(0.05)
             except Exception:
                 time.sleep(0.01)
+
+    def _on_homing_result(self, ok, axis_name=""):
+        if ok:
+            self.current_angles = [0.0, 0.0, 0.0]
+            self.target_angles = [0.0, 0.0, 0.0]
+            self.motors_free_state = False
+            # Abrir la pinza al ángulo abierto configurado al terminar Home con Switches
+            self.gripper_state = False
+            self.current_gripper_deg = self.gripper_open_deg
+            self.send_cmd("GRIPPER_ANG", self.gripper_open_deg)
+            if hasattr(self, "var_gripper_deg"):
+                self.var_gripper_deg.set(f"{self.gripper_open_deg:.1f}")
+            if hasattr(self, "btn_gripper"):
+                self.btn_gripper.config(
+                    text=f"Pinza SG90: ABIERTA ({self.gripper_open_deg:.0f}°)",
+                    bg="#475569"
+                )
+            if hasattr(self, "var_x"):
+                self.var_x.set("0.00")
+                self.var_y.set("0.00")
+                self.var_z.set("0.00")
+            self.lbl_mode_pill.config(
+                text="HOMING OK — CERO (0.0°, 0.0°, 0.0°) FIJADO | PINZA ABIERTA",
+                bg=COLOR_GREEN_BG, fg=COLOR_GREEN
+            )
+            if hasattr(self, "lbl_xyz_ik_info"):
+                self.lbl_xyz_ik_info.config(
+                    text="Switches en Cero -> M1=0.0°, M2=0.0°, M3=0.0° | Pinza abierta",
+                    fg=COLOR_GREEN
+                )
+        else:
+            self.lbl_mode_pill.config(
+                text=f"ERROR HOMING: TIMEOUT EN {axis_name}",
+                bg=COLOR_AMBER_BG, fg=COLOR_RED
+            )
+
+    def reset_table_to_zero(self):
+        """Reinicia las 9 casillas y el dispensador a 0.0°, 0.0°, 0.0° (origen de switches)."""
+        if not messagebox.askyesno(
+            "Poner Tabla en 0",
+            "¿Deseas reiniciar las 9 casillas y el dispensador a (0.0°, 0.0°, 0.0°)?"
+        ):
+            return
+        now = time.strftime("%H:%M:%S")
+        for key in [str(i) for i in range(1, 10)] + ["pick"]:
+            self.calibrated_cells[key] = {
+                "angles": [0.0, 0.0, 0.0],
+                "cartesian": [0.0, 0.0, 0.0],
+                "gripper_deg": round(self.gripper_open_deg, 1),
+                "gripper_open": True,
+                "recorded_at": now
+            }
+        self.save_calibrated_cells()
+        self.update_cells_display()
+        if hasattr(self, "var_x"):
+            self.var_x.set("0.00")
+            self.var_y.set("0.00")
+            self.var_z.set("0.00")
 
     # --------------------------------------------------------------------------
     # COMANDOS DE CONTROL
@@ -326,6 +506,7 @@ class CalibradorCasillasApp(tk.Tk):
 
     def cmd_motors_lock(self):
         self.motors_free_state = False
+        self.target_angles = list(self.current_angles)
         self.send_cmd("LOCK")
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
 
@@ -335,8 +516,18 @@ class CalibradorCasillasApp(tk.Tk):
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
 
     def cmd_homing_switches(self):
-        """Ejecuta en la ESP32 la rutina de Homing físico (M3/M2 atrás + M1 barrido ±10°..±180°)."""
+        """Ejecuta en la ESP32 la rutina de Homing físico (M3 -> M2 -> M1) y abre la pinza."""
         self.motors_free_state = False
+        self.gripper_state = False
+        self.current_gripper_deg = self.gripper_open_deg
+        self.send_cmd("GRIPPER_ANG", self.gripper_open_deg)
+        if hasattr(self, "var_gripper_deg"):
+            self.var_gripper_deg.set(f"{self.gripper_open_deg:.1f}")
+        if hasattr(self, "btn_gripper"):
+            self.btn_gripper.config(
+                text=f"Pinza SG90: ABIERTA ({self.gripper_open_deg:.0f}°)",
+                bg="#475569"
+            )
         self.send_cmd("HOMING")
         self.lbl_mode_pill.config(text="HOMING CON SWITCHES EN CURSO...", bg=COLOR_AMBER_BG, fg=COLOR_AMBER)
 
@@ -346,7 +537,7 @@ class CalibradorCasillasApp(tk.Tk):
         self.current_gripper_deg = ang
         if hasattr(self, "var_gripper_deg"):
             self.var_gripper_deg.set(f"{ang:.1f}")
-        self.send_cmd("GRIPPER", ang)
+        self.send_cmd("GRIPPER_ANG", ang)
         self.btn_gripper.config(
             text=f"Pinza SG90: CERRADA ({ang:.0f}°)" if self.gripper_state else f"Pinza SG90: ABIERTA ({ang:.0f}°)",
             bg=COLOR_GREEN if self.gripper_state else "#475569"
@@ -360,7 +551,7 @@ class CalibradorCasillasApp(tk.Tk):
             return
         self.current_gripper_deg = ang
         self.gripper_state = abs(ang - self.gripper_close_deg) < abs(ang - self.gripper_open_deg)
-        self.send_cmd("GRIPPER", ang)
+        self.send_cmd("GRIPPER_ANG", ang)
         self.btn_gripper.config(
             text=f"Pinza SG90: {'CERRADA' if self.gripper_state else 'ABIERTA'} ({ang:.0f}°)",
             bg=COLOR_GREEN if self.gripper_state else "#475569"
@@ -386,11 +577,40 @@ class CalibradorCasillasApp(tk.Tk):
 
     def jog_axis(self, axis_idx, delta_deg):
         self.motors_free_state = False
-        new_ang = list(self.current_angles)
-        new_ang[axis_idx] += delta_deg
-
+        new_ang = list(self.target_angles)
+        new_ang[axis_idx] = round(new_ang[axis_idx] + delta_deg, 2)
+        self.target_angles = new_ang
+        if hasattr(self, "var_x"):
+            self.var_x.set(f"{new_ang[0]:.2f}")
+            self.var_y.set(f"{new_ang[1]:.2f}")
+            self.var_z.set(f"{new_ang[2]:.2f}")
         self.send_cmd("ANGLES", new_ang[0], new_ang[1], new_ang[2])
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
+
+    def jog_direction(self, d_m1=0.0, d_m2=0.0, d_m3=0.0):
+        """Mueve el robot directamente en los sentidos reales desde el cero de los switches."""
+        self.motors_free_state = False
+        try:
+            step = float(self.var_jog_step.get().replace("°", "").strip())
+        except Exception:
+            step = 5.0
+        new_ang = [
+            round(self.target_angles[0] + d_m1 * step, 2),
+            round(self.target_angles[1] + d_m2 * step, 2),
+            round(self.target_angles[2] + d_m3 * step, 2),
+        ]
+        self.target_angles = new_ang
+        if hasattr(self, "var_x"):
+            self.var_x.set(f"{new_ang[0]:.2f}")
+            self.var_y.set(f"{new_ang[1]:.2f}")
+            self.var_z.set(f"{new_ang[2]:.2f}")
+        self.send_cmd("ANGLES", new_ang[0], new_ang[1], new_ang[2])
+        self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
+        if hasattr(self, "lbl_xyz_ik_info"):
+            self.lbl_xyz_ik_info.config(
+                text=f"Objetivo -> M1={new_ang[0]:+.1f}°, M2={new_ang[1]:+.1f}°, M3={new_ang[2]:+.1f}°",
+                fg=COLOR_BLUE
+            )
 
     def open_pdf_template(self):
         if not os.path.exists(self.pdf_template_path):
@@ -445,43 +665,29 @@ class CalibradorCasillasApp(tk.Tk):
             return None
 
     def move_to_xyz(self):
+        """Envía directamente los ángulos (M1°, M2°, M3°) ingresados al robot."""
         coords = self._parse_xyz()
         if coords is None:
             return
-        x, y, z = coords
-        angles, ok, msg = self.kin.inverse_kinematics(x, y, z)
-        if not ok:
-            messagebox.showwarning("Fuera de alcance", f"No se puede alcanzar ({x:.2f}, {y:.2f}, {z:.2f}):\n{msg}")
-            return
-        q1, q2, q3 = angles
+        q1, q2, q3 = coords
+        if q2 > 0.0:
+            q2 = 0.0
+        if q3 > 0.0:
+            q3 = 0.0
         self.motors_free_state = False
-        self.current_angles = [q1, q2, q3]
+        self.target_angles = [q1, q2, q3]
         self.send_cmd("ANGLES", q1, q2, q3)
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
         if hasattr(self, "lbl_xyz_ik_info"):
-            self.lbl_xyz_ik_info.config(text=f"IK: q1={q1:+.2f}°, q2={q2:+.2f}°, q3={q3:+.2f}°", fg=COLOR_GREEN)
+            self.lbl_xyz_ik_info.config(text=f"Moviendo a: M1={q1:+.2f}°, M2={q2:+.2f}°, M3={q3:+.2f}°", fg=COLOR_GREEN)
 
     def jog_xyz(self, axis_idx, delta_cm):
-        coords = self._parse_xyz()
-        if coords is None:
-            return
-        vals = list(coords)
-        vals[axis_idx] = round(vals[axis_idx] + delta_cm, 2)
-        self.var_x.set(f"{vals[0]:.2f}")
-        self.var_y.set(f"{vals[1]:.2f}")
-        self.var_z.set(f"{vals[2]:.2f}")
-        self.move_to_xyz()
+        self.jog_axis(axis_idx, delta_cm)
 
     def save_xyz_to_target(self):
-        coords = self._parse_xyz()
-        if coords is None:
-            return
-        x, y, z = coords
-        angles, ok, msg = self.kin.inverse_kinematics(x, y, z)
-        if not ok:
-            messagebox.showwarning("Fuera de alcance", f"No se puede guardar ({x:.2f}, {y:.2f}, {z:.2f}):\n{msg}")
-            return
-        q1, q2, q3 = angles
+        """Guarda los ángulos actuales (M1°, M2°, M3°) en la casilla/dispensador seleccionado."""
+        q1, q2, q3 = self.current_angles[0], self.current_angles[1], self.current_angles[2]
+        x, y, z = self.kin.forward_kinematics(q1, q2, q3)
         sel = self.combo_xyz_target.get()
         key = "pick" if "Dispensador" in sel else sel.split()[-1]
 
@@ -494,14 +700,14 @@ class CalibradorCasillasApp(tk.Tk):
         }
         self.save_calibrated_cells()
         self.update_cells_display()
-        self.current_angles = [q1, q2, q3]
         if hasattr(self, "lbl_xyz_ik_info"):
-            self.lbl_xyz_ik_info.config(text=f"Guardado en {sel}: q=({q1:+.1f}°, {q2:+.1f}°, {q3:+.1f}°)", fg=COLOR_GREEN)
+            self.lbl_xyz_ik_info.config(text=f"Guardado en {sel}: M1={q1:+.1f}°, M2={q2:+.1f}°, M3={q3:+.1f}°", fg=COLOR_GREEN)
         messagebox.showinfo(
-            "Posición Guardada por (X, Y, Z)",
+            "Posición Guardada",
             f"¡{sel} guardada con éxito!\n\n"
-            f"  • Coordenadas: X={x:.2f} cm, Y={y:.2f} cm, Z={z:.2f} cm\n"
-            f"  • Ángulos IK:  M1={q1:+.2f}°, M2={q2:+.2f}°, M3={q3:+.2f}°"
+            f"  • M1 (Base):   {q1:+.2f}°\n"
+            f"  • M2 (Hombro): {q2:+.2f}°\n"
+            f"  • M3 (Codo):   {q3:+.2f}°"
         )
 
     def move_to_cell(self, key):
@@ -512,6 +718,11 @@ class CalibradorCasillasApp(tk.Tk):
 
         q1, q2, q3 = data["angles"]
         self.motors_free_state = False
+        self.target_angles = [float(q1), float(q2), float(q3)]
+        if hasattr(self, "var_x"):
+            self.var_x.set(f"{q1:.2f}")
+            self.var_y.set(f"{q2:.2f}")
+            self.var_z.set(f"{q3:.2f}")
         self.send_cmd("ANGLES", q1, q2, q3)
         if "gripper_deg" in data:
             g_deg = float(data["gripper_deg"])
@@ -519,7 +730,7 @@ class CalibradorCasillasApp(tk.Tk):
             self.gripper_state = not bool(data.get("gripper_open", True))
             if hasattr(self, "var_gripper_deg"):
                 self.var_gripper_deg.set(f"{g_deg:.1f}")
-            self.send_cmd("GRIPPER", g_deg)
+            self.send_cmd("GRIPPER_ANG", g_deg)
         self.lbl_mode_pill.config(text="MOTORES BLOQUEADOS (CON TORQUE)", bg=COLOR_BLUE_BG, fg=COLOR_BLUE)
 
     # --------------------------------------------------------------------------
@@ -692,6 +903,9 @@ class CalibradorCasillasApp(tk.Tk):
         self.lbl_status = tk.Label(top_bar, text="[DESCONECTADO]", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 9, "bold"))
         self.lbl_status.pack(side=tk.LEFT, padx=4)
 
+        self.lbl_sw_status = tk.Label(top_bar, text="SW: M1[0] M2[0] M3[0]", bg=COLOR_BG_PANEL, fg=COLOR_TEXT_MUTED, font=("Consolas", 9, "bold"))
+        self.lbl_sw_status.pack(side=tk.LEFT, padx=10)
+
         # Botón para abrir el PDF 1:1
         tk.Button(
             top_bar, text="ABRIR PLANTILLA 1:1 (PDF)", bg="#4338ca", fg="#ffffff",
@@ -735,15 +949,15 @@ class CalibradorCasillasApp(tk.Tk):
         ).pack(side=tk.LEFT, padx=4)
 
         tk.Button(
-            m_btn_row, text="IR A CERO (0.0°)", bg="#0284c7", fg="#ffffff",
+            m_btn_row, text="HOME CON SWITCHES (0.0°)", bg="#c2410c", fg="#ffffff",
             font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
-            command=self.cmd_home
+            command=self.cmd_homing_switches
         ).pack(side=tk.LEFT, padx=4)
 
         tk.Button(
-            m_btn_row, text="HOME CON SWITCHES", bg="#c2410c", fg="#ffffff",
+            m_btn_row, text="TABLA EN 0", bg="#64748b", fg="#ffffff",
             font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
-            command=self.cmd_homing_switches
+            command=self.reset_table_to_zero
         ).pack(side=tk.LEFT, padx=4)
 
         self.btn_gripper = tk.Button(
@@ -880,45 +1094,88 @@ class CalibradorCasillasApp(tk.Tk):
         right_col = tk.Frame(body, bg=COLOR_BG_PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground=COLOR_BORDER)
         right_col.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(4, 0))
 
-        # --- PANEL DE INDICACIONES EN X, Y, Z PARA MOVER Y GUARDAR ---
+        # --- PANEL DE CONTROL DIRECTO (ADELANTE / ATRÁS / LADOS) DESDE CERO SWITCHES ---
         xyz_card = tk.Frame(right_col, bg=COLOR_BG_CARD, padx=10, pady=8, highlightthickness=1, highlightbackground=COLOR_BORDER)
         xyz_card.pack(fill=tk.X, pady=(0, 8))
 
+        hdr_dir = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        hdr_dir.pack(fill=tk.X)
         tk.Label(
-            xyz_card, text="INDICACIONES EN (X, Y, Z) — MOVER Y GUARDAR POSICIÓN",
+            hdr_dir, text="CONTROL DIRECTO (DESDE CERO DE SWITCHES)",
             bg=COLOR_BG_CARD, fg=COLOR_ACCENT, font=("Segoe UI", 9, "bold")
-        ).pack(anchor=tk.W)
+        ).pack(side=tk.LEFT)
+        tk.Label(hdr_dir, text="Paso:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 8, "bold")).pack(side=tk.RIGHT, padx=(4, 2))
+        self.var_jog_step = tk.StringVar(value="10°")
+        ttk.Combobox(
+            hdr_dir, textvariable=self.var_jog_step,
+            values=["1°", "5°", "10°", "20°"], state="readonly", width=5
+        ).pack(side=tk.RIGHT)
+
+        # Pad direccional intuitivo
+        pad_row1 = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        pad_row1.pack(fill=tk.X, pady=(5, 2))
+        tk.Button(
+            pad_row1, text="◀ IZQUIERDA (M1)", bg="#0284c7", fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
+            command=lambda: self.jog_direction(d_m1=-1.0)
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        tk.Button(
+            pad_row1, text="▲ ADELANTE (M2+M3)", bg="#15803d", fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
+            command=lambda: self.jog_direction(d_m2=-1.0, d_m3=-1.0)
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=2)
+        tk.Button(
+            pad_row1, text="DERECHA (M1) ▶", bg="#0284c7", fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=4, cursor="hand2",
+            command=lambda: self.jog_direction(d_m1=+1.0)
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+
+        pad_row2 = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
+        pad_row2.pack(fill=tk.X, pady=(2, 4))
+        tk.Button(
+            pad_row2, text="▼ ATRÁS (M2+M3)", bg="#475569", fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=6, pady=3, cursor="hand2",
+            command=lambda: self.jog_direction(d_m2=+1.0, d_m3=+1.0)
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        tk.Button(
+            pad_row2, text="M2 Adel (-)", bg="#334155", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=5, pady=3, cursor="hand2",
+            command=lambda: self.jog_direction(d_m2=-1.0)
+        ).pack(side=tk.LEFT, padx=1)
+        tk.Button(
+            pad_row2, text="M2 Atrás (+)", bg="#334155", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=5, pady=3, cursor="hand2",
+            command=lambda: self.jog_direction(d_m2=+1.0)
+        ).pack(side=tk.LEFT, padx=1)
+        tk.Button(
+            pad_row2, text="M3 Adel (-)", bg="#334155", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=5, pady=3, cursor="hand2",
+            command=lambda: self.jog_direction(d_m3=-1.0)
+        ).pack(side=tk.LEFT, padx=1)
+        tk.Button(
+            pad_row2, text="M3 Atrás (+)", bg="#334155", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=5, pady=3, cursor="hand2",
+            command=lambda: self.jog_direction(d_m3=+1.0)
+        ).pack(side=tk.LEFT, padx=(1, 0))
 
         row_in = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
-        row_in.pack(fill=tk.X, pady=(4, 2))
+        row_in.pack(fill=tk.X, pady=(2, 2))
 
-        self.var_x = tk.StringVar(value="61.20")
+        self.var_x = tk.StringVar(value="0.00")
         self.var_y = tk.StringVar(value="0.00")
-        self.var_z = tk.StringVar(value="-29.10")
+        self.var_z = tk.StringVar(value="0.00")
 
-        for lbl, var in [("X (cm):", self.var_x), ("Y (cm):", self.var_y), ("Z (cm):", self.var_z)]:
+        for lbl, var in [("M1°:", self.var_x), ("M2°:", self.var_y), ("M3°:", self.var_z)]:
             tk.Label(row_in, text=lbl, bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 2))
-            tk.Entry(row_in, textvariable=var, width=7, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 8))
+            tk.Entry(row_in, textvariable=var, width=6, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 5))
 
         tk.Button(
-            row_in, text="Mover a (X, Y, Z)", bg=COLOR_BLUE, fg="#ffffff",
-            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=10, pady=3, cursor="hand2",
+            row_in, text="Ir a Ángulos", bg=COLOR_BLUE, fg="#ffffff",
+            font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=8, pady=3, cursor="hand2",
             command=self.move_to_xyz
         ).pack(side=tk.LEFT, padx=(2, 0))
 
-        # Botones Jog rápido en X, Y, Z
-        jog_xyz_frame = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
-        jog_xyz_frame.pack(fill=tk.X, pady=3)
-        for ax_idx, ax_name in [(0, "X"), (1, "Y"), (2, "Z")]:
-            tk.Label(jog_xyz_frame, text=f"{ax_name}:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_MUTED, font=("Segoe UI", 7, "bold")).pack(side=tk.LEFT, padx=(4 if ax_idx > 0 else 0, 2))
-            for d_cm in (-5.0, -1.0, +1.0, +5.0):
-                txt = f"{d_cm:+.0f}"
-                tk.Button(
-                    jog_xyz_frame, text=txt, font=("Segoe UI", 7), padx=3, pady=0, cursor="hand2",
-                    command=lambda i=ax_idx, d=d_cm: self.jog_xyz(i, d)
-                ).pack(side=tk.LEFT, padx=1)
-
-        # Guardar (X, Y, Z) directamente en una casilla o dispensador
+        # Guardar posición actual en una casilla o dispensador
         save_row = tk.Frame(xyz_card, bg=COLOR_BG_CARD)
         save_row.pack(fill=tk.X, pady=(4, 2))
         tk.Label(save_row, text="Destino:", bg=COLOR_BG_CARD, fg=COLOR_TEXT_PRIMARY, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT, padx=(0, 4))
@@ -931,7 +1188,7 @@ class CalibradorCasillasApp(tk.Tk):
         self.combo_xyz_target.pack(side=tk.LEFT, padx=(0, 6))
 
         tk.Button(
-            save_row, text="Guardar (X, Y, Z) en Destino", bg=COLOR_GREEN, fg="#ffffff",
+            save_row, text="Guardar Posición en Destino", bg=COLOR_GREEN, fg="#ffffff",
             font=("Segoe UI", 8, "bold"), relief=tk.FLAT, padx=10, pady=3, cursor="hand2",
             command=self.save_xyz_to_target
         ).pack(side=tk.LEFT)
@@ -949,18 +1206,18 @@ class CalibradorCasillasApp(tk.Tk):
         self.var_gripper_deg = tk.StringVar(value=f"{self.current_gripper_deg:.1f}")
         tk.Entry(grip_row, textvariable=self.var_gripper_deg, width=6, font=("Consolas", 9)).pack(side=tk.LEFT, padx=(0, 4))
         tk.Button(
-            grip_row, text="Probar Pinza", bg="#0284c7", fg="#ffffff",
-            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=7, pady=2, cursor="hand2",
+            grip_row, text="Probar", bg="#0284c7", fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=6, pady=2, cursor="hand2",
             command=self.move_gripper_angle
         ).pack(side=tk.LEFT, padx=2)
         tk.Button(
             grip_row, text="Guardar ABIERTA", bg="#475569", fg="#ffffff",
-            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=7, pady=2, cursor="hand2",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=6, pady=2, cursor="hand2",
             command=lambda: self.save_gripper_preset(True)
         ).pack(side=tk.LEFT, padx=2)
         tk.Button(
-            grip_row, text="Guardar AGARRAR (Cerrada)", bg=COLOR_AMBER, fg="#ffffff",
-            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=7, pady=2, cursor="hand2",
+            grip_row, text="Guardar CERRADA", bg=COLOR_AMBER, fg="#ffffff",
+            font=("Segoe UI", 7, "bold"), relief=tk.FLAT, padx=6, pady=2, cursor="hand2",
             command=lambda: self.save_gripper_preset(False)
         ).pack(side=tk.LEFT, padx=2)
 
